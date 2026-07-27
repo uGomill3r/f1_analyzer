@@ -1,10 +1,14 @@
 # analytics/modules/pace_by_stint.py
 
+import logging
+
 import numpy as np
 from collections import defaultdict
 
 from analytics.modules.base import BaseAnalysisModule
 from core.models import Lap
+
+logger = logging.getLogger(__name__)
 
 
 class PaceByStint(BaseAnalysisModule):
@@ -64,7 +68,11 @@ class PaceByStint(BaseAnalysisModule):
             # degradación (pendiente)
             try:
                 slope = np.polyfit(lap_numbers, lap_times, 1)[0]
-            except:
+            except Exception:
+                logger.warning(
+                    "No se pudo calcular la degradación para %s stint %s; se usa 0.",
+                    driver_code, stint_number
+                )
                 slope = 0
 
             result.append({
@@ -79,10 +87,17 @@ class PaceByStint(BaseAnalysisModule):
                 "laps": [
                     {
                         "lap": lap.lap_number,
-                        "time": lap.lap_time
+                        "time": lap.lap_time,
+                        # gap al auto de adelante (para clasificar tráfico en el frontend)
+                        "gap_to_front": lap.gap_to_front
                     } for lap in laps
                 ]
             })
+
+        logger.info(
+            "pace_by_stint: race_id=%s -> %s stints procesados",
+            filters.get("race_id"), len(result)
+        )
 
         return result
 
