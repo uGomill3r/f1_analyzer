@@ -1,0 +1,76 @@
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+
+# Distribución / build
+build/
+dist/
+*.egg-info/
+
+# =========================
+# DJANGO
+# =========================
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Archivos estáticos/media (si los generas localmente)
+media/
+staticfiles/
+
+# =========================
+# FASTF1 / DATA CACHE
+# =========================
+cache/
+*.pkl
+
+# =========================
+# PANDAS / DATA FILES
+# =========================
+*.csv
+*.xlsx
+*.parquet
+
+# =========================
+# PYCHARM / IDEA
+# =========================
+.idea/
+*.iml
+
+# =========================
+# VS CODE (por si acaso)
+# =========================
+.vscode/
+
+# =========================
+# macOS
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# =========================
+# LINUX
+# =========================
+*~
+
+# =========================
+# DOCKER
+# =========================
+*.pid
+
+# =========================
+# ENV VARIABLES
+# =========================
+.env
+.env.*
+!.env.example
