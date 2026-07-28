@@ -71,12 +71,6 @@
     stroke-width: 1.2;
     stroke-dasharray: 2 2;
   }
-  .stint-median-tick {
-    stroke-linecap: round;
-  }
-  .stint-median-line {
-    stroke-dasharray: 3 2;
-  }
   .lap-label {
     font-size: 6px;
     text-anchor: middle;
@@ -108,39 +102,6 @@
     border-radius: 50%;
     display: inline-block;
   }
-  #stint-tables {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 18px;
-  }
-  .driver-table {
-    border-collapse: collapse;
-    font-size: 12px;
-    min-width: 240px;
-  }
-  .driver-table caption {
-    font-weight: 700;
-    text-align: left;
-    padding-bottom: 6px;
-  }
-  .driver-table th, .driver-table td {
-    border: 1px solid #d8d4c8;
-    padding: 4px 8px;
-    text-align: right;
-  }
-  .driver-table th:first-child, .driver-table td:first-child {
-    text-align: left;
-  }
-  .driver-table th {
-    background: #eae6d9;
-  }
-  .compound-swatch {
-    display: inline-block;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    margin-right: 5px;
-  }
 </style>
 </head>
 <body>
@@ -171,16 +132,7 @@
     <span class="item">— línea sólida: media</span>
     <span class="item">- - línea punteada: percentil 25 / 75</span>
     <span class="item">Bandas: cuartiles (claro = rápido, oscuro = lento)</span>
-    <span class="item">▬ tick corto (color de compuesto) = mediana del stint</span>
-    <span class="item">╱ línea fina discontinua = evolución de medianas entre stints</span>
   </div>
-
-  <h2 style="margin-top:36px;font-size:20px;">Ritmo por stint y compuesto</h2>
-  <p class="subtitle" style="margin-bottom:16px;">
-    Valor sugerido: <strong>mediana</strong> (robusta a outliers residuales dentro del stint,
-    como tráfico puntual o el warm-up del neumático). La media se muestra al lado para comparar.
-  </p>
-  <div id="stint-tables"></div>
 
 <script>
 // ---------------------------------------------------------------
@@ -324,7 +276,6 @@ async function loadAndRender() {
     ? `${excludedCount} vuelta(s) excluida(s) según los filtros marcados.`
     : "";
   drawChart(drivers);
-  renderStintTables(drivers);
 }
 
 function drawChart(drivers) {
@@ -454,7 +405,7 @@ function drawChart(drivers) {
       g.append("circle")
         .attr("class", "header-stint-swatch")
         .attr("cx", cx - 23)
-        .attr("cy", stintRowY - 3)
+        .attr("cy", stintRowY)
         .attr("r", 3)
         .attr("fill", compoundColor(stint.compound))
         .attr("stroke", isHard ? "#999" : "none")
@@ -472,9 +423,6 @@ function drawChart(drivers) {
     // --- Puntos, separados por stint (jitter horizontal) ---
     const numStints = driver.stints.length;
     const subLaneWidth = (laneHalf * 2) / numStints;
-
-    // medianas por stint (para el tick corto + la línea de evolución)
-    const stintMedianPoints = [];
 
     driver.stints.forEach((stint) => {
       const subCenter = cx - laneHalf + subLaneWidth * (stint.stintIndex + 0.5);
@@ -501,40 +449,6 @@ function drawChart(drivers) {
           .text(lap.lap);
       });
 
-      if (stint.median !== undefined) {
-        stintMedianPoints.push({ x: subCenter, y: y(stint.median), halfWidth: inner / 2 });
-      }
-    });
-
-    // --- Línea fina conectando medianas de stints consecutivos (evolución dentro de la carrera) ---
-    if (stintMedianPoints.length > 1) {
-      const lineGen = d3.line().x((p) => p.x).y((p) => p.y);
-      g.append("path")
-        .attr("class", "stint-median-line")
-        .attr("d", lineGen(stintMedianPoints))
-        .attr("fill", "none")
-        .attr("stroke", color)
-        .attr("stroke-width", 1.3)
-        .attr("stroke-dasharray", "3 2")
-        .attr("opacity", 0.85);
-    }
-
-    // --- Tick corto por stint: mediana del stint, coloreado por compuesto ---
-    // (a diferencia de la línea de media general, que abarca todo el carril del piloto)
-    driver.stints.forEach((stint) => {
-      if (stint.median === undefined) return;
-      const subCenter = cx - laneHalf + subLaneWidth * (stint.stintIndex + 0.5);
-      const inner = subLaneWidth * 0.7;
-
-      g.append("line")
-        .attr("class", "stint-median-tick")
-        .attr("x1", subCenter - inner / 2)
-        .attr("x2", subCenter + inner / 2)
-        .attr("y1", y(stint.median))
-        .attr("y2", y(stint.median))
-        .attr("stroke", compoundColor(stint.compound))
-        .attr("stroke-width", 3)
-        .attr("stroke-linecap", "round");
     });
   });
 
@@ -593,60 +507,6 @@ function drawTeamPercentColumn(svg, drivers, y, margin, width, height, rightColW
 }
 
 document.getElementById("loadBtn").addEventListener("click", loadAndRender);
-
-// ---------------------------------------------------------------
-// Tabla por piloto: compuesto, stint, mediana (valor sugerido) y media,
-// sobre el mismo set de vueltas filtrado que usa el gráfico.
-// ---------------------------------------------------------------
-function renderStintTables(drivers) {
-  const container = document.getElementById("stint-tables");
-  container.innerHTML = "";
-
-  drivers.forEach((driver) => {
-    const table = document.createElement("table");
-    table.className = "driver-table";
-
-    const caption = document.createElement("caption");
-    caption.style.color = teamColor(driver.team);
-    caption.textContent = `${driver.driver} — ${driver.team}`;
-    table.appendChild(caption);
-
-    const thead = document.createElement("thead");
-    thead.innerHTML = `
-      <tr>
-        <th>Stint</th>
-        <th>Compuesto</th>
-        <th>Vueltas</th>
-        <th>Mediana</th>
-        <th>Media</th>
-        <th>Desv. std</th>
-      </tr>`;
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-
-    driver.stints.forEach((stint) => {
-      if (stint.laps.length === 0) return; // sin vueltas tras el filtro
-      const times = stint.laps.map((l) => l.time);
-      const median = d3.quantile(times.slice().sort(d3.ascending), 0.5);
-      const mean = d3.mean(times);
-      const std = d3.deviation(times) || 0;
-
-      const row = document.createElement("tr");
-      row.innerHTML = `
-        <td>${stint.stintNumber}</td>
-        <td><span class="compound-swatch" style="background:${compoundColor(stint.compound)}"></span>${stint.compound || "—"}</td>
-        <td>${times.length}</td>
-        <td><strong>${formatLapTime(median)}</strong></td>
-        <td>${formatLapTime(mean)}</td>
-        <td>${std.toFixed(3)}s</td>`;
-      tbody.appendChild(row);
-    });
-
-    table.appendChild(tbody);
-    container.appendChild(table);
-  });
-}
 </script>
 </body>
 </html>
