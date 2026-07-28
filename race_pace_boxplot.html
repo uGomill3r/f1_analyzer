@@ -42,6 +42,11 @@
     font-weight: 700;
     text-anchor: middle;
   }
+  .header-driver-code {
+    font-size: 14px;
+    font-weight: 700;
+    text-anchor: middle;
+  }
   .header-mean {
     font-size: 12px;
     font-weight: 700;
@@ -281,28 +286,28 @@ async function loadAndRender() {
 function drawChart(drivers) {
   const laneWidth = 80;
   const height = 560;
-  const rightColWidth = 90;
 
-  // El header de cada carril muestra: media general, paradas, y debajo
-  // un renglón por cada stint con su mediana. El margen superior se
-  // calcula según el piloto con más stints para que siempre entren.
-  const headerTopPad = 22;   // espacio antes del texto de media
-  const meanRowH = 16;       // separación media -> stops
-  const stopsRowH = 16;      // separación stops -> primer stint
-  const stintRowH = 11;      // separación entre renglones de stint
+  // El header de cada carril muestra: sigla del piloto, media general,
+  // paradas, y debajo un renglón por cada stint con su mediana. El margen
+  // superior se calcula según el piloto con más stints para que siempre entren.
+  const headerTopPad = 20;    // espacio antes de la sigla del piloto
+  const driverRowH = 16;      // separación sigla -> media
+  const meanRowH = 16;        // separación media -> stops
+  const stopsRowH = 16;       // separación stops -> primer stint
+  const stintRowH = 11;       // separación entre renglones de stint
   const headerBottomPad = 10; // aire antes de que empiece el gráfico
   const maxStints = d3.max(drivers, (d) => d.stints.filter((s) => s.laps.length > 0).length) || 1;
 
   const margin = {
-    top: headerTopPad + meanRowH + stopsRowH + maxStints * stintRowH + headerBottomPad,
-    right: 140,
+    top: headerTopPad + driverRowH + meanRowH + stopsRowH + maxStints * stintRowH + headerBottomPad,
+    right: 40,
     bottom: 40,
     left: 70,
   };
   const width = drivers.length * laneWidth;
 
   const svg = d3.select("#chart")
-    .attr("width", width + margin.left + margin.right + rightColWidth)
+    .attr("width", width + margin.left + margin.right)
     .attr("height", height + margin.top + margin.bottom);
 
   svg.selectAll("*").remove();
@@ -380,10 +385,18 @@ function drawChart(drivers) {
       stint.median = d3.quantile(times.slice().sort(d3.ascending), 0.5);
     });
 
-    // --- Cabecera: media, paradas, y mediana de cada stint ---
-    const headerMeanY = -(margin.top - headerTopPad);
+    // --- Cabecera: sigla del piloto, media, paradas, y mediana de cada stint ---
+    const headerDriverY = -(margin.top - headerTopPad);
+    const headerMeanY = headerDriverY + driverRowH;
     const headerStopsY = headerMeanY + meanRowH;
     const stintListStartY = headerStopsY + stopsRowH;
+
+    g.append("text")
+      .attr("class", "header-driver-code")
+      .attr("x", cx)
+      .attr("y", headerDriverY)
+      .attr("fill", color)
+      .text(driver.driver);
 
     g.append("text")
       .attr("class", "header-mean")
@@ -462,48 +475,6 @@ function drawChart(drivers) {
     .attr("y", height + 26)
     .attr("fill", (d) => teamColor(d.team))
     .text((d) => d.driver);
-
-  drawTeamPercentColumn(svg, drivers, y, margin, width, height, rightColWidth);
-}
-
-// ---------------------------------------------------------------
-// Columna lateral: % de vueltas por equipo en bins de 0.25s
-// ---------------------------------------------------------------
-function drawTeamPercentColumn(svg, drivers, y, margin, width, height, rightColWidth) {
-  const colX = margin.left + width + 30;
-  const binSize = 0.25;
-  const allLaps = drivers.flatMap((d) =>
-    d.stints.flatMap((s) => s.laps.map((l) => ({ time: l.time, team: d.team })))
-  );
-  if (allLaps.length === 0) return;
-
-  const [minT, maxT] = d3.extent(allLaps, (l) => l.time);
-  const binStart = Math.floor(minT / binSize) * binSize;
-  const binCount = Math.ceil((maxT - binStart) / binSize) + 1;
-
-  const teams = Array.from(new Set(drivers.map((d) => d.team)));
-  const g = svg.append("g").attr("transform", `translate(${colX},${margin.top})`);
-
-  for (let i = 0; i < binCount; i++) {
-    const lo = binStart + i * binSize;
-    const hi = lo + binSize;
-    const lapsInBin = allLaps.filter((l) => l.time >= lo && l.time < hi);
-    if (lapsInBin.length === 0) continue;
-
-    let acc = 0;
-    teams.forEach((team) => {
-      const count = lapsInBin.filter((l) => l.team === team).length;
-      if (count === 0) return;
-      const frac = count / lapsInBin.length;
-      g.append("rect")
-        .attr("x", acc * rightColWidth)
-        .attr("y", y(hi))
-        .attr("width", frac * rightColWidth)
-        .attr("height", Math.max(1, y(lo) - y(hi)))
-        .attr("fill", teamColor(team));
-      acc += frac;
-    });
-  }
 }
 
 document.getElementById("loadBtn").addEventListener("click", loadAndRender);
