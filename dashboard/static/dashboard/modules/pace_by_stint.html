@@ -17,17 +17,6 @@
     margin: 0;
     padding: 24px;
   }
-  #controls {
-    display: flex;
-    gap: 14px;
-    align-items: center;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
-  }
-  #controls input, #controls button {
-    font-size: 14px;
-    padding: 6px 10px;
-  }
   h1 {
     font-size: 26px;
     margin: 0 0 4px 0;
@@ -107,70 +96,12 @@
     border-radius: 50%;
     display: inline-block;
   }
-  #driverFilter {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  #driverFilter .chip-actions {
-    display: flex;
-    gap: 6px;
-    margin-right: 6px;
-  }
-  #driverFilter .chip-actions button {
-    font-size: 12px;
-    padding: 4px 9px;
-    border: 1px solid #cfcabc;
-    background: #fff;
-    border-radius: 12px;
-    cursor: pointer;
-  }
-  #driverFilter .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 13px;
-    padding: 4px 10px 4px 8px;
-    border-radius: 14px;
-    border: 1px solid #d8d4c8;
-    background: #fff;
-    cursor: pointer;
-    user-select: none;
-  }
-  #driverFilter .chip:has(input:not(:checked)) {
-    opacity: 0.45;
-  }
-  #driverFilter .chip input {
-    margin: 0;
-    cursor: pointer;
-  }
-  #driverFilter .chip .dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
-  }
 </style>
 </head>
 <body>
 
   <h1>Race Pace — Boxplot por piloto</h1>
   <div class="subtitle" id="subtitle">Ordenado por tiempo de vuelta promedio</div>
-
-  <div id="controls">
-    <label>API base: <input id="apiBase" value="http://127.0.0.1:8000" size="24"></label>
-    <label>race_id: <input id="raceId" value="1" size="4"></label>
-    <label><input type="checkbox" id="includeFirstLap"> Incluir vuelta 1</label>
-    <label><input type="checkbox" id="includePit"> Incluir entrada/salida de pits</label>
-    <label><input type="checkbox" id="includeTrackStatus"> Incluir SC / VSC / bandera amarilla o roja</label>
-    <button id="loadBtn">Cargar</button>
-    <label><input type="checkbox" id="groupByTeam"> Agrupar compañeros de equipo</label>
-  </div>
-
-  <div id="driverFilter"></div>
 
   <div id="status"></div>
   <svg id="chart"></svg>
@@ -189,6 +120,14 @@
   </div>
 
 <script>
+// ---------------------------------------------------------------
+// Esta página vive embebida en un <iframe> dentro del frontend base
+// (dashboard/templates/dashboard/base.html). Los controles (filtros de
+// vuelta, selector de pilotos, agrupar por equipo, y el race_id/api_base)
+// viven en el menú del frontend base, no acá. La comunicación entre ambos
+// se hace con postMessage (ver protocolo abajo).
+// ---------------------------------------------------------------
+
 // ---------------------------------------------------------------
 // Paleta de colores por equipo (fallback a escala ordinal si no matchea)
 // ---------------------------------------------------------------
@@ -241,8 +180,8 @@ function formatLapTime(secs) {
 // ---------------------------------------------------------------
 // Transforma la respuesta cruda del módulo pace_by_stint en datos por
 // piloto. El backend ya marca cada vuelta con is_outlier + outlier_reasons
-// (first_lap, pit, track_status); acá solo se decide, según los checkboxes
-// del usuario, qué motivos se excluyen del análisis.
+// (first_lap, pit, track_status); acá solo se decide, según includeReasons,
+// qué motivos se excluyen del análisis.
 // ---------------------------------------------------------------
 function buildDriverData(rawStints, includeReasons) {
   const byDriver = new Map();
@@ -297,10 +236,19 @@ function buildDriverData(rawStints, includeReasons) {
 }
 
 // ---------------------------------------------------------------
-// Estado del último dataset cargado + helpers de orden/filtro
+// Estado: datos crudos del último race_id cargado + filtros vigentes
+// (los filtros llegan desde el frontend base vía postMessage).
 // ---------------------------------------------------------------
+let apiBase = "http://127.0.0.1:8000";
+let raceId = null;
+let lastRawStints = null;
 let allDrivers = [];
-let lastStatusMessage = "";
+
+const filterState = {
+  includeReasons: { first_lap: false, pit: false, track_status: false },
+  groupByTeam: false,
+  selectedDrivers: null, // null = todos
+};
 
 // Orden por defecto: más rápido primero. Orden agrupado: los equipos se
 // ordenan por su mejor promedio, y dentro de cada equipo los dos pilotos
@@ -323,101 +271,73 @@ function sortDrivers(drivers, groupByTeam) {
 }
 
 // ---------------------------------------------------------------
-// Selector de pilotos: chips con checkbox para comparar solo
-// algunos pilotos (por ejemplo, dos o tres a elección).
+// Comunicación con el frontend base (window.parent)
 // ---------------------------------------------------------------
-function renderDriverFilter(drivers) {
-  const container = document.getElementById("driverFilter");
-  container.innerHTML = "";
-
-  const actions = document.createElement("div");
-  actions.className = "chip-actions";
-
-  const allBtn = document.createElement("button");
-  allBtn.type = "button";
-  allBtn.textContent = "Todos";
-  allBtn.addEventListener("click", () => {
-    container.querySelectorAll(".chip input").forEach((cb) => (cb.checked = true));
-    updateChart();
-  });
-
-  const noneBtn = document.createElement("button");
-  noneBtn.type = "button";
-  noneBtn.textContent = "Ninguno";
-  noneBtn.addEventListener("click", () => {
-    container.querySelectorAll(".chip input").forEach((cb) => (cb.checked = false));
-    updateChart();
-  });
-
-  actions.appendChild(allBtn);
-  actions.appendChild(noneBtn);
-  container.appendChild(actions);
-
-  drivers.forEach((d) => {
-    const chip = document.createElement("label");
-    chip.className = "chip";
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = d.driver;
-    checkbox.checked = true;
-    checkbox.addEventListener("change", updateChart);
-
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.style.background = teamColor(d.team);
-
-    chip.appendChild(checkbox);
-    chip.appendChild(dot);
-    chip.appendChild(document.createTextNode(d.driver));
-    container.appendChild(chip);
-  });
+function notifyParentDrivers(drivers) {
+  window.parent.postMessage({
+    source: "pace-by-stint",
+    type: "drivers",
+    drivers: drivers.map((d) => ({ code: d.driver, team: d.team, color: teamColor(d.team) })),
+  }, window.location.origin);
 }
 
-function getSelectedDriverCodes() {
-  return Array.from(document.querySelectorAll("#driverFilter .chip input:checked")).map((cb) => cb.value);
+function notifyParentStatus(message) {
+  window.parent.postMessage({
+    source: "pace-by-stint",
+    type: "status",
+    message,
+  }, window.location.origin);
 }
 
-// Vuelve a filtrar/ordenar y redibujar sin volver a pedir datos al backend.
+// Recalcula allDrivers a partir de los datos crudos + filterState.includeReasons,
+// avisa al padre (lista de pilotos + nota de vueltas excluidas) y redibuja.
+function rebuildAndDraw() {
+  if (!lastRawStints) return;
+
+  const { drivers, excludedCount } = buildDriverData(lastRawStints, filterState.includeReasons);
+  allDrivers = drivers;
+
+  notifyParentDrivers(allDrivers);
+  notifyParentStatus(
+    excludedCount > 0 ? `${excludedCount} vuelta(s) excluida(s) según los filtros marcados.` : ""
+  );
+
+  updateChart();
+}
+
 function updateChart() {
   const statusEl = document.getElementById("status");
   const subtitleEl = document.getElementById("subtitle");
-  const groupByTeam = document.getElementById("groupByTeam").checked;
-  const selected = getSelectedDriverCodes();
 
   if (allDrivers.length === 0) return;
+
+  const selected = filterState.selectedDrivers ?? allDrivers.map((d) => d.driver);
 
   if (selected.length === 0) {
     d3.select("#chart").selectAll("*").remove();
     d3.select("#chart").attr("width", 0).attr("height", 0);
-    statusEl.textContent = "Seleccioná al menos un piloto para ver el gráfico.";
+    statusEl.textContent = "Seleccioná al menos un piloto (en el menú) para ver el gráfico.";
     return;
   }
 
+  statusEl.textContent = "";
+
   const filtered = sortDrivers(
     allDrivers.filter((d) => selected.includes(d.driver)),
-    groupByTeam
+    filterState.groupByTeam
   );
 
-  subtitleEl.textContent = groupByTeam
+  subtitleEl.textContent = filterState.groupByTeam
     ? "Agrupado por equipo — compañeros uno al lado del otro"
     : "Ordenado por tiempo de vuelta promedio";
-  statusEl.textContent = lastStatusMessage;
 
   drawChart(filtered);
 }
 
 // ---------------------------------------------------------------
-// Render principal
+// Carga de datos (se dispara una sola vez, al recibir race_id por query param)
 // ---------------------------------------------------------------
 async function loadAndRender() {
-  const apiBase = document.getElementById("apiBase").value.replace(/\/$/, "");
-  const raceId = document.getElementById("raceId").value;
-  const includeReasons = {
-    first_lap: document.getElementById("includeFirstLap").checked,
-    pit: document.getElementById("includePit").checked,
-    track_status: document.getElementById("includeTrackStatus").checked,
-  };
   const statusEl = document.getElementById("status");
   statusEl.textContent = "Cargando datos...";
 
@@ -436,18 +356,28 @@ async function loadAndRender() {
     return;
   }
 
-  const { drivers, excludedCount } = buildDriverData(payload.data, includeReasons);
-  lastStatusMessage = excludedCount > 0
-    ? `${excludedCount} vuelta(s) excluida(s) según los filtros marcados.`
-    : "";
-
-  allDrivers = drivers;
-  renderDriverFilter(allDrivers);
-  updateChart();
+  statusEl.textContent = "";
+  lastRawStints = payload.data;
+  filterState.selectedDrivers = null; // al cargar una carrera nueva, arrancar con todos seleccionados
+  rebuildAndDraw();
 }
 
-document.getElementById("groupByTeam").addEventListener("change", updateChart);
+// ---------------------------------------------------------------
+// Mensajes entrantes desde el frontend base: actualización de filtros
+// (checkboxes de vuelta, agrupar por equipo, selección de pilotos).
+// ---------------------------------------------------------------
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) return;
 
+  const msg = event.data;
+  if (!msg || msg.source !== "f1-dashboard" || msg.type !== "update-filters") return;
+
+  if (msg.includeReasons) filterState.includeReasons = msg.includeReasons;
+  if (typeof msg.groupByTeam === "boolean") filterState.groupByTeam = msg.groupByTeam;
+  if (Array.isArray(msg.selectedDrivers)) filterState.selectedDrivers = msg.selectedDrivers;
+
+  rebuildAndDraw();
+});
 
 function drawChart(drivers) {
   const laneWidth = 80;
@@ -643,14 +573,9 @@ function drawChart(drivers) {
     .text((d) => d.driver);
 }
 
-document.getElementById("loadBtn").addEventListener("click", loadAndRender);
-
 // ---------------------------------------------------------------
 // Integración con el frontend base (dashboard).
-// Si esta página se carga embebida vía iframe con ?race_id=...&api_base=...,
-// se usan esos valores para precargar los inputs y disparar la carga
-// automáticamente. Si no vienen (uso standalone), la página funciona igual
-// que siempre, con los valores por defecto de los inputs.
+// Esta página siempre se carga embebida vía iframe con ?race_id=...&api_base=...
 // ---------------------------------------------------------------
 (function initFromQueryParams() {
   const params = new URLSearchParams(window.location.search);
@@ -658,10 +583,10 @@ document.getElementById("loadBtn").addEventListener("click", loadAndRender);
   const apiBaseParam = params.get("api_base");
 
   if (apiBaseParam) {
-    document.getElementById("apiBase").value = apiBaseParam;
+    apiBase = apiBaseParam;
   }
   if (raceIdParam) {
-    document.getElementById("raceId").value = raceIdParam;
+    raceId = raceIdParam;
     loadAndRender();
   }
 })();
