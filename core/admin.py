@@ -18,8 +18,15 @@ class DriverAdmin(admin.ModelAdmin):
 
 @admin.register(Race)
 class RaceAdmin(admin.ModelAdmin):
-    list_display = ("name",)
-    search_fields = ("name",)
+    # year, round_code (Rxx), tipo de sesión (Sprint/Race) y nombre del Gran Premio.
+    list_display = ("year", "round_code", "get_session_type_display", "gp_name")
+    list_filter = ("year", "session_type")
+    search_fields = ("gp_name",)
+    ordering = ("year", "round_number", "session_type")
+
+    @admin.display(description="Sesión")
+    def get_session_type_display(self, obj):
+        return obj.get_session_type_display()
 
 
 @admin.register(Stint)

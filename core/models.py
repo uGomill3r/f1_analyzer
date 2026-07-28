@@ -18,10 +18,59 @@ class Driver(models.Model):
 
 
 class Race(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    """
+    Representa una sesión de tipo Race o Sprint de un Gran Premio.
+
+    Se identifica de forma única por año + número de ronda del campeonato +
+    tipo de sesión, ya que un mismo fin de semana "sprint" puede tener tanto
+    una sesión Race como una Sprint (ambas con datos de vueltas relevantes
+    para el análisis de ritmo).
+
+    El número de ronda (round_number) y el nombre corto del Gran Premio
+    (gp_name) se obtienen de FastF1 (session.event.RoundNumber /
+    session.event.EventName). A partir de round_number se construye la
+    nomenclatura "Rxx" usada en toda la app (ver la propiedad round_code).
+    """
+
+    SESSION_RACE = "R"
+    SESSION_SPRINT = "S"
+    SESSION_TYPE_CHOICES = [
+        (SESSION_RACE, "Race"),
+        (SESSION_SPRINT, "Sprint"),
+    ]
+
+    year = models.PositiveSmallIntegerField(
+        help_text="Temporada del campeonato (ej: 2026)."
+    )
+    round_number = models.PositiveSmallIntegerField(
+        help_text="Número de ronda dentro de la temporada (1, 2, 3, ...), según FastF1."
+    )
+    gp_name = models.CharField(
+        max_length=100,
+        help_text="Nombre corto del Gran Premio (FastF1 EventName), ej: 'Hungarian Grand Prix'.",
+    )
+    session_type = models.CharField(
+        max_length=1, choices=SESSION_TYPE_CHOICES, default=SESSION_RACE
+    )
+
+    class Meta:
+        ordering = ["year", "round_number", "session_type"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["year", "round_number", "session_type"],
+                name="unique_race_session_per_round",
+            )
+        ]
+
+    @property
+    def round_code(self):
+        """Nomenclatura Rxx de la ronda dentro de la temporada (ej: R01, R13)."""
+        return f"R{self.round_number:02d}"
+
+    round_code.fget.short_description = "Ronda"
 
     def __str__(self):
-        return self.name
+        return f"{self.year} {self.round_code} - {self.gp_name} ({self.get_session_type_display()})"
 
 
 class Stint(models.Model):
@@ -38,7 +87,7 @@ class Stint(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.driver.code} - {self.race.name} - stint {self.stint_number}"
+        return f"{self.driver.code} - {self.race} - stint {self.stint_number}"
 
 
 class Lap(models.Model):
@@ -80,7 +129,7 @@ class Lap(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.driver.code} - {self.race.name} - vuelta {self.lap_number}"
+        return f"{self.driver.code} - {self.race} - vuelta {self.lap_number}"
 
     @property
     def outlier_reasons(self):

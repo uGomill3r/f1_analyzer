@@ -45,12 +45,48 @@ f1_analyzer/
 │       ├── tyre_degradation_advanced.py
 │       └── pace_adjusted.py
 │
+├── dashboard/              # Frontend base (título + menú + páginas por módulo)
+│   ├── views.py
+│   ├── urls.py
+│   ├── templates/dashboard/base.html
+│   └── static/dashboard/modules/
+│       ├── pace_by_stint.html
+│       └── blank.html
+│
 ├── config/                 # Configuración Django (settings, urls, wsgi/asgi)
 ├── manage.py
 ├── requirements.txt
 ├── .env.example
 └── README.md
 ```
+
+## 🏁 Modelo Race: nomenclatura Rxx
+
+`Race` identifica una sesión de tipo **Race** o **Sprint** de un Gran Premio, y se
+indexa de forma única por `year` + `round_number` + `session_type`:
+
+- `year`: temporada (ej: 2026).
+- `round_number`: número de ronda del campeonato según FastF1 (`session.event.RoundNumber`).
+- `gp_name`: nombre corto del Gran Premio (`session.event.EventName`), ej: "Hungarian Grand Prix".
+- `session_type`: `R` (Race) o `S` (Sprint).
+- `round_code` (propiedad): nomenclatura `Rxx` de la ronda, ej: `R01`, `R13`.
+
+Esto permite cargar tanto la sesión Race como la Sprint de un mismo fin de semana
+sprint sin que se pisen entre sí.
+
+## 🖥️ Frontend base
+
+```
+GET /
+```
+
+Página con el título "F1 Analyzer" y un menú oculto (☰ Menú) con selectores de
+**año**, **Gran Premio**, **tipo de sesión** (Race/Sprint) y **funcionalidad**
+(módulo de analytics). Al presionar "Cargar", se resuelve el `race_id`
+correspondiente y se carga en un iframe la página estática del módulo elegido.
+
+Los módulos que todavía no tienen una página de visualización propia cargan una
+página en blanco (el endpoint `/api/analysis` sigue disponible igual).
 
 ## ⚙️ Instalación
 
@@ -98,10 +134,13 @@ python manage.py migrate
 
 ```bash
 python manage.py load_fastf1 --year 2026 --race "Hungarian" --session R
+python manage.py load_fastf1 --year 2026 --race "Hungarian" --session S   # sesión Sprint
 ```
 
 > ⚠️ La primera ejecución puede tardar debido a la descarga de datos.
 > El comando es idempotente: puede volver a ejecutarse sin duplicar vueltas.
+> Solo se admiten sesiones **Race** y **Sprint** (las únicas con datos de vueltas
+> relevantes para el ritmo de carrera); no se soportan Practice/Qualifying.
 
 ### 7. Ejecutar servidor
 

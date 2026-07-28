@@ -644,6 +644,27 @@ function drawChart(drivers) {
 }
 
 document.getElementById("loadBtn").addEventListener("click", loadAndRender);
+
+// ---------------------------------------------------------------
+// Integración con el frontend base (dashboard).
+// Si esta página se carga embebida vía iframe con ?race_id=...&api_base=...,
+// se usan esos valores para precargar los inputs y disparar la carga
+// automáticamente. Si no vienen (uso standalone), la página funciona igual
+// que siempre, con los valores por defecto de los inputs.
+// ---------------------------------------------------------------
+(function initFromQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  const raceIdParam = params.get("race_id");
+  const apiBaseParam = params.get("api_base");
+
+  if (apiBaseParam) {
+    document.getElementById("apiBase").value = apiBaseParam;
+  }
+  if (raceIdParam) {
+    document.getElementById("raceId").value = raceIdParam;
+    loadAndRender();
+  }
+})();
 </script>
 </body>
 </html>

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F1 Analyzer</title>
+<style>
+  :root {
+    --bg: #f2f2f0;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+    --panel: #202020;
+    --panel-alt: #2b2b2b;
+    --accent: #e0a938;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* --- Encabezado --- */
+  header {
+    background: var(--panel);
+    color: #f5f1e8;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 20px;
+  }
+  header h1 {
+    font-size: 20px;
+    margin: 0;
+    letter-spacing: 0.3px;
+  }
+  header .flag { color: var(--accent); }
+
+  #menu-toggle {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #menu-toggle:hover { background: var(--accent); color: var(--panel); }
+
+  /* --- Menú oculto (colapsable) --- */
+  #menu-panel {
+    background: var(--panel-alt);
+    color: #f5f1e8;
+    padding: 0 20px;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease, padding 0.25s ease;
+  }
+  #menu-panel.open {
+    max-height: 240px;
+    padding: 16px 20px;
+  }
+  #menu-panel .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: flex-end;
+  }
+  #menu-panel label {
+    display: flex;
+    flex-direction: column;
+    font-size: 12px;
+    color: #bdbdbd;
+    gap: 4px;
+  }
+  #menu-panel select {
+    font-size: 14px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #1c1c1c;
+    color: #f5f1e8;
+    min-width: 190px;
+  }
+  #load-module {
+    font-size: 14px;
+    padding: 8px 18px;
+    border-radius: 4px;
+    border: none;
+    background: var(--accent);
+    color: #1c1c1c;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #load-module:hover { filter: brightness(1.08); }
+  #menu-status {
+    font-size: 12px;
+    color: #bdbdbd;
+    margin-top: 10px;
+  }
+
+  /* --- Contenido --- */
+  main { flex: 1; display: flex; }
+  #content-frame { flex: 1; border: none; width: 100%; }
+  #empty-state {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 40px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="menu-panel">☰ Menú</button>
+  <h1><span class="flag">🏁</span> F1 Analyzer</h1>
+</header>
+
+<div id="menu-panel">
+  <div class="row">
+    <label>Año
+      <select id="select-year"></select>
+    </label>
+    <label>Gran Premio
+      <select id="select-gp"></select>
+    </label>
+    <label>Sesión
+      <select id="select-session"></select>
+    </label>
+    <label>Funcionalidad
+      <select id="select-module"></select>
+    </label>
+    <button id="load-module" type="button">Cargar</button>
+  </div>
+  <div id="menu-status"></div>
+</div>
+
+<main>
+  <iframe id="content-frame" title="Módulo de analytics" style="display:none;"></iframe>
+  <div id="empty-state">Abrí el menú (☰ Menú) y elegí año, Gran Premio, sesión y funcionalidad para cargar un análisis.</div>
+</main>
+
+{{ races|json_script:"races-data" }}
+{{ modules|json_script:"modules-data" }}
+{{ static_url|json_script:"static-url-data" }}
+{{ default_module_page|json_script:"default-module-page-data" }}
+
+<script>
+(function () {
+  const RACES = JSON.parse(document.getElementById("races-data").textContent);
+  const MODULES = JSON.parse(document.getElementById("modules-data").textContent);
+  const STATIC_URL = JSON.parse(document.getElementById("static-url-data").textContent);
+  const DEFAULT_MODULE_PAGE = JSON.parse(document.getElementById("default-module-page-data").textContent);
+
+  const menuToggle = document.getElementById("menu-toggle");
+  const menuPanel = document.getElementById("menu-panel");
+  const yearSelect = document.getElementById("select-year");
+  const gpSelect = document.getElementById("select-gp");
+  const sessionSelect = document.getElementById("select-session");
+  const moduleSelect = document.getElementById("select-module");
+  const statusEl = document.getElementById("menu-status");
+  const frame = document.getElementById("content-frame");
+  const emptyState = document.getElementById("empty-state");
+
+  function racesForYear(year) {
+    return RACES.filter((r) => String(r.year) === String(year));
+  }
+
+  function fillSelect(select, options) {
+    select.innerHTML = "";
+    options.forEach(({ value, label }) => {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      select.appendChild(opt);
+    });
+  }
+
+  function populateYears() {
+    const years = Array.from(new Set(RACES.map((r) => r.year))).sort((a, b) => a - b);
+    fillSelect(yearSelect, years.map((year) => ({ value: year, label: year })));
+  }
+
+  function populateGrandPrix() {
+    // Un Gran Premio = misma ronda (round_number) dentro del año elegido.
+    // Puede tener sesión Race, Sprint, o ambas.
+    const seenRounds = new Map();
+    racesForYear(yearSelect.value).forEach((r) => {
+      if (!seenRounds.has(r.round_number)) seenRounds.set(r.round_number, r);
+    });
+    const rounds = Array.from(seenRounds.values()).sort((a, b) => a.round_number - b.round_number);
+    fillSelect(
+      gpSelect,
+      rounds.map((r) => ({ value: r.round_number, label: `${r.round_code} — ${r.gp_name}` }))
+    );
+  }
+
+  function populateSessions() {
+    const available = racesForYear(yearSelect.value).filter(
+      (r) => String(r.round_number) === String(gpSelect.value)
+    );
+    fillSelect(
+      sessionSelect,
+      available.map((r) => ({ value: r.session_type, label: r.session_type_label }))
+    );
+  }
+
+  function populateModules() {
+    fillSelect(moduleSelect, MODULES.map((m) => ({ value: m.name, label: m.label })));
+  }
+
+  function findRaceId() {
+    const match = RACES.find(
+      (r) =>
+        String(r.year) === String(yearSelect.value) &&
+        String(r.round_number) === String(gpSelect.value) &&
+        r.session_type === sessionSelect.value
+    );
+    return match ? match.id : null;
+  }
+
+  function findModulePage(moduleName) {
+    const module = MODULES.find((m) => m.name === moduleName);
+    return module ? module.page : DEFAULT_MODULE_PAGE;
+  }
+
+  menuToggle.addEventListener("click", () => {
+    const isOpen = menuPanel.classList.toggle("open");
+    menuToggle.setAttribute("aria-expanded", isOpen);
+  });
+
+  yearSelect.addEventListener("change", () => {
+    populateGrandPrix();
+    populateSessions();
+  });
+  gpSelect.addEventListener("change", populateSessions);
+
+  document.getElementById("load-module").addEventListener("click", () => {
+    const raceId = findRaceId();
+    if (!raceId) {
+      statusEl.textContent = "No hay datos cargados para esa combinación de año / Gran Premio / sesión.";
+      return;
+    }
+
+    const modulePage = findModulePage(moduleSelect.value);
+    const src = `${STATIC_URL}${modulePage}?race_id=${raceId}&api_base=${encodeURIComponent(window.location.origin)}`;
+    const moduleLabel = moduleSelect.selectedOptions[0] ? moduleSelect.selectedOptions[0].textContent : moduleSelect.value;
+
+    statusEl.textContent = `Cargando ${moduleLabel}...`;
+    frame.src = src;
+    frame.style.display = "block";
+    emptyState.style.display = "none";
+  });
+
+  // --- Inicialización ---
+  populateModules();
+  if (RACES.length === 0) {
+    statusEl.textContent = "Todavía no hay carreras cargadas (usá el comando load_fastf1).";
+  } else {
+    populateYears();
+    populateGrandPrix();
+    populateSessions();
+  }
+})();
+</script>
+</body>
+</html>

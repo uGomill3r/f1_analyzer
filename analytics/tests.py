@@ -10,7 +10,9 @@ class AnalysisViewTests(TestCase):
         self.client = APIClient()
         self.team = Team.objects.create(name="Red Bull")
         self.driver = Driver.objects.create(code="VER", name="Max Verstappen", team=self.team)
-        self.race = Race.objects.create(name="Hungarian 2026")
+        self.race = Race.objects.create(
+            year=2026, round_number=13, gp_name="Hungarian Grand Prix", session_type=Race.SESSION_RACE
+        )
 
         for i in range(1, 6):
             Lap.objects.create(

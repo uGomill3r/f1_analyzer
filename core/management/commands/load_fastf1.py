@@ -1,23 +1,37 @@
+import logging
+
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from core.models import Driver, Lap, Race, Stint, Team
 
+logger = logging.getLogger(__name__)
+
+# Mapeo de session.name (FastF1) al session_type interno de Race.
+# Solo se soportan sesiones "de carrera" (Race / Sprint): son las únicas que
+# tienen datos de vueltas relevantes para los módulos de ritmo de carrera.
+# Nota: en 2021 FastF1 llamó "Sprint Qualifying" a lo que hoy es la Sprint.
+SESSION_NAME_TO_TYPE = {
+    "Race": Race.SESSION_RACE,
+    "Sprint": Race.SESSION_SPRINT,
+    "Sprint Qualifying": Race.SESSION_SPRINT,
+}
+
 
 class Command(BaseCommand):
-    help = "Descarga una sesión de FastF1 y la carga en la base de datos."
+    help = "Descarga una sesión de FastF1 (Race o Sprint) y la carga en la base de datos."
 
     def add_arguments(self, parser):
         parser.add_argument("--year", type=int, required=True, help="Ej: 2026")
         parser.add_argument("--race", type=str, required=True, help="Ej: 'Hungarian'")
         parser.add_argument(
             "--session", type=str, default="R",
-            help="Sesión FastF1: R, Q, FP1, FP2, FP3, S (default: R)",
+            help="Identificador de sesión FastF1: 'R' (Race) o 'S' (Sprint). Default: R",
         )
         parser.add_argument(
-            "--race-name", type=str, default=None,
-            help="Nombre a guardar en el modelo Race (default: '<race> <year>')",
+            "--gp-name", type=str, default=None,
+            help="Nombre a guardar como gp_name (default: session.event.EventName de FastF1)",
         )
 
     def handle(self, *args, **options):
@@ -34,16 +48,34 @@ class Command(BaseCommand):
 
         year = options["year"]
         race_input = options["race"]
-        session_type = options["session"]
-        race_name = options["race_name"] or f"{race_input} {year}"
+        session_identifier = options["session"]
 
-        self.stdout.write(f"Descargando {race_input} {year} ({session_type})...")
+        self.stdout.write(f"Descargando {race_input} {year} ({session_identifier})...")
+        logger.info(
+            "load_fastf1: iniciando descarga year=%s race=%s session=%s",
+            year, race_input, session_identifier,
+        )
 
         try:
-            session = fastf1.get_session(year, race_input, session_type)
+            session = fastf1.get_session(year, race_input, session_identifier)
             session.load()
         except Exception as exc:
+            logger.exception("load_fastf1: fallo al cargar la sesión de FastF1")
             raise CommandError(f"No se pudo cargar la sesión de FastF1: {exc}") from exc
+
+        # -----------------------------
+        # Resolver año / ronda (Rxx) / tipo de sesión a partir de FastF1
+        # -----------------------------
+
+        session_type = SESSION_NAME_TO_TYPE.get(session.name)
+        if session_type is None:
+            raise CommandError(
+                f"Tipo de sesión '{session.name}' no soportado por este comando. "
+                "Solo se admiten sesiones de tipo Race o Sprint (ritmo de carrera)."
+            )
+
+        round_number = int(session.event.RoundNumber)
+        gp_name = options["gp_name"] or session.event.EventName
 
         laps_df = session.laps
         if laps_df is None or laps_df.empty:
@@ -53,7 +85,24 @@ class Command(BaseCommand):
         updated_laps = 0
 
         with transaction.atomic():
-            race, _ = Race.objects.get_or_create(name=race_name)
+            # Idempotente: si la ronda + tipo de sesión ya existe, se actualiza
+            # el gp_name en vez de duplicar el registro.
+            race, race_created = Race.objects.update_or_create(
+                year=year,
+                round_number=round_number,
+                session_type=session_type,
+                defaults={"gp_name": gp_name},
+            )
+
+            self.stdout.write(
+                f"{'Creado' if race_created else 'Actualizado'} registro de carrera: "
+                f"{race} (ronda {race.round_code})"
+            )
+            logger.info(
+                "load_fastf1: race id=%s year=%s round=%s (%s) session_type=%s creada=%s",
+                race.id, race.year, race.round_number, race.round_code,
+                race.session_type, race_created,
+            )
 
             for driver_code in laps_df["Driver"].unique():
                 driver_laps = laps_df.pick_drivers(driver_code) if hasattr(
@@ -107,6 +156,10 @@ class Command(BaseCommand):
                     else:
                         updated_laps += 1
 
+        logger.info(
+            "load_fastf1: finalizado race_id=%s creadas=%s actualizadas=%s",
+            race.id, created_laps, updated_laps,
+        )
         self.stdout.write(self.style.SUCCESS(
             f"Listo. Vueltas creadas: {created_laps}, actualizadas: {updated_laps}."
         ))
