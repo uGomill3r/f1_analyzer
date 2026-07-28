@@ -52,6 +52,11 @@
     text-anchor: middle;
     fill: #444;
   }
+  .header-stint-median {
+    font-size: 9.5px;
+    fill: #444;
+    dominant-baseline: middle;
+  }
   .axis text {
     fill: var(--muted);
     font-size: 12px;
@@ -323,11 +328,27 @@ async function loadAndRender() {
 }
 
 function drawChart(drivers) {
-  const margin = { top: 70, right: 140, bottom: 40, left: 70 };
   const laneWidth = 80;
-  const width = drivers.length * laneWidth;
   const height = 560;
   const rightColWidth = 90;
+
+  // El header de cada carril muestra: media general, paradas, y debajo
+  // un renglón por cada stint con su mediana. El margen superior se
+  // calcula según el piloto con más stints para que siempre entren.
+  const headerTopPad = 22;   // espacio antes del texto de media
+  const meanRowH = 16;       // separación media -> stops
+  const stopsRowH = 16;      // separación stops -> primer stint
+  const stintRowH = 11;      // separación entre renglones de stint
+  const headerBottomPad = 10; // aire antes de que empiece el gráfico
+  const maxStints = d3.max(drivers, (d) => d.stints.filter((s) => s.laps.length > 0).length) || 1;
+
+  const margin = {
+    top: headerTopPad + meanRowH + stopsRowH + maxStints * stintRowH + headerBottomPad,
+    right: 140,
+    bottom: 40,
+    left: 70,
+  };
+  const width = drivers.length * laneWidth;
 
   const svg = d3.select("#chart")
     .attr("width", width + margin.left + margin.right + rightColWidth)
@@ -400,18 +421,53 @@ function drawChart(drivers) {
       .attr("y2", y(driver.mean))
       .attr("stroke", color);
 
-    // --- Cabecera: media y paradas ---
+    // --- Medianas por stint (se calculan acá para el header, y se
+    // reutilizan más abajo para el tick corto + la línea de evolución) ---
+    driver.stints.forEach((stint) => {
+      if (stint.laps.length === 0) return;
+      const times = stint.laps.map((l) => l.time);
+      stint.median = d3.quantile(times.slice().sort(d3.ascending), 0.5);
+    });
+
+    // --- Cabecera: media, paradas, y mediana de cada stint ---
+    const headerMeanY = -(margin.top - headerTopPad);
+    const headerStopsY = headerMeanY + meanRowH;
+    const stintListStartY = headerStopsY + stopsRowH;
+
     g.append("text")
       .attr("class", "header-mean")
       .attr("x", cx)
-      .attr("y", -46)
+      .attr("y", headerMeanY)
       .text(formatLapTime(driver.mean));
 
     g.append("text")
       .attr("class", "header-stops")
       .attr("x", cx)
-      .attr("y", -30)
+      .attr("y", headerStopsY)
       .text(`${driver.stops} stop${driver.stops === 1 ? "" : "s"}`);
+
+    let stintRowY = stintListStartY;
+    driver.stints.forEach((stint) => {
+      if (stint.median === undefined) return;
+      const isHard = stint.compound && stint.compound.toUpperCase() === "HARD";
+
+      g.append("circle")
+        .attr("class", "header-stint-swatch")
+        .attr("cx", cx - 23)
+        .attr("cy", stintRowY - 3)
+        .attr("r", 3)
+        .attr("fill", compoundColor(stint.compound))
+        .attr("stroke", isHard ? "#999" : "none")
+        .attr("stroke-width", 0.8);
+
+      g.append("text")
+        .attr("class", "header-stint-median")
+        .attr("x", cx - 16)
+        .attr("y", stintRowY)
+        .text(`S${stint.stintNumber} ${formatLapTime(stint.median)}`);
+
+      stintRowY += stintRowH;
+    });
 
     // --- Puntos, separados por stint (jitter horizontal) ---
     const numStints = driver.stints.length;
@@ -445,9 +501,7 @@ function drawChart(drivers) {
           .text(lap.lap);
       });
 
-      if (stint.laps.length > 0) {
-        const times = stint.laps.map((l) => l.time);
-        stint.median = d3.quantile(times.slice().sort(d3.ascending), 0.5);
+      if (stint.median !== undefined) {
         stintMedianPoints.push({ x: subCenter, y: y(stint.median), halfWidth: inner / 2 });
       }
     });
