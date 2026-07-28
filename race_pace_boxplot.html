@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Race Pace — Boxplot por piloto</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    --bg: #f2f2f0;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+  }
+  body {
+    background: var(--bg);
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: var(--ink);
+    margin: 0;
+    padding: 24px;
+  }
+  #controls {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  #controls input, #controls button {
+    font-size: 14px;
+    padding: 6px 10px;
+  }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 4px 0;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  .driver-label {
+    font-size: 13px;
+    font-weight: 700;
+    text-anchor: middle;
+  }
+  .header-mean {
+    font-size: 12px;
+    font-weight: 700;
+    text-anchor: middle;
+  }
+  .header-stops {
+    font-size: 11px;
+    text-anchor: middle;
+    fill: #444;
+  }
+  .axis text {
+    fill: var(--muted);
+    font-size: 12px;
+  }
+  .axis path, .axis line {
+    stroke: #cfcabc;
+  }
+  .mean-line {
+    stroke-width: 2.5;
+  }
+  .box-edge {
+    stroke-width: 1.2;
+    stroke-dasharray: 2 2;
+  }
+  .lap-label {
+    font-size: 6px;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+    fill: #1c1c1c;
+  }
+  #status {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  #legend {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  #legend .item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #legend .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+</style>
+</head>
+<body>
+
+  <h1>Race Pace — Boxplot por piloto</h1>
+  <div class="subtitle" id="subtitle">Ordenado por tiempo de vuelta promedio</div>
+
+  <div id="controls">
+    <label>API base: <input id="apiBase" value="http://127.0.0.1:8000" size="24"></label>
+    <label>race_id: <input id="raceId" value="1" size="4"></label>
+    <label><input type="checkbox" id="includeFirstLap"> Incluir vuelta 1</label>
+    <label><input type="checkbox" id="includePit"> Incluir entrada/salida de pits</label>
+    <label><input type="checkbox" id="includeTrackStatus"> Incluir SC / VSC / bandera amarilla o roja</label>
+    <button id="loadBtn">Cargar</button>
+  </div>
+
+  <div id="status"></div>
+  <svg id="chart"></svg>
+
+  <div id="legend">
+    <span class="item">Cada punto = 1 vuelta, color de relleno por neumático:</span>
+    <span class="item"><span class="dot" style="background:#f0625b"></span>Soft</span>
+    <span class="item"><span class="dot" style="background:#f4c542"></span>Medium</span>
+    <span class="item"><span class="dot" style="background:#f5f1e8;border:1px solid #999"></span>Hard</span>
+    <span class="item"><span class="dot" style="background:#3fb27f"></span>Inter</span>
+    <span class="item"><span class="dot" style="background:#3f7fd6"></span>Wet</span>
+    <span class="item">(borde = color de equipo)</span>
+    <span class="item">— línea sólida: media</span>
+    <span class="item">- - línea punteada: percentil 25 / 75</span>
+    <span class="item">Bandas: cuartiles (claro = rápido, oscuro = lento)</span>
+  </div>
+
+<script>
+// ---------------------------------------------------------------
+// Paleta de colores por equipo (fallback a escala ordinal si no matchea)
+// ---------------------------------------------------------------
+const TEAM_COLORS = {
+  "Red Bull Racing": "#3671C6",
+  "Red Bull": "#3671C6",
+  "Ferrari": "#E8002D",
+  "Mercedes": "#27F4D2",
+  "McLaren": "#FF8000",
+  "Aston Martin": "#229971",
+  "Alpine": "#00A1E8",
+  "Williams": "#64C4FF",
+  "RB": "#6692FF",
+  "Racing Bulls": "#6692FF",
+  "Kick Sauber": "#52E252",
+  "Sauber": "#52E252",
+  "Audi": "#9B0000",
+  "Haas": "#B6BABD",
+  "Cadillac": "#8B6F47",
+};
+const fallbackColorScale = d3.scaleOrdinal(d3.schemeTableau10);
+
+function teamColor(teamName) {
+  return TEAM_COLORS[teamName] || fallbackColorScale(teamName);
+}
+
+// ---------------------------------------------------------------
+// Colores por compuesto de neumático
+// ---------------------------------------------------------------
+const COMPOUND_COLORS = {
+  SOFT: "#f0625b",
+  MEDIUM: "#f4c542",
+  HARD: "#f5f1e8",
+  INTERMEDIATE: "#3fb27f",
+  INTER: "#3fb27f",
+  WET: "#3f7fd6",
+};
+
+function compoundColor(compound) {
+  if (!compound) return "#999";
+  return COMPOUND_COLORS[compound.toUpperCase()] || "#999";
+}
+
+function formatLapTime(secs) {
+  const m = Math.floor(secs / 60);
+  const s = (secs % 60).toFixed(3);
+  return `${m}:${s.padStart(6, "0")}`;
+}
+
+// ---------------------------------------------------------------
+// Transforma la respuesta cruda del módulo pace_by_stint en datos por
+// piloto. El backend ya marca cada vuelta con is_outlier + outlier_reasons
+// (first_lap, pit, track_status); acá solo se decide, según los checkboxes
+// del usuario, qué motivos se excluyen del análisis.
+// ---------------------------------------------------------------
+function buildDriverData(rawStints, includeReasons) {
+  const byDriver = new Map();
+
+  rawStints.forEach((stint) => {
+    if (!byDriver.has(stint.driver)) {
+      byDriver.set(stint.driver, { driver: stint.driver, team: stint.team, stints: [] });
+    }
+    byDriver.get(stint.driver).stints.push({
+      stintNumber: stint.stint,
+      compound: stint.compound,
+      laps: stint.laps.map((l) => ({
+        lap: l.lap,
+        time: l.time,
+        compound: stint.compound,
+        outlierReasons: l.outlier_reasons || [],
+      })),
+    });
+  });
+
+  let drivers = Array.from(byDriver.values());
+  drivers.forEach((d) => d.stints.sort((a, b) => a.stintNumber - b.stintNumber));
+
+  // una vuelta se excluye si tiene algún motivo que el usuario NO marcó para incluir
+  const shouldExclude = (lap) =>
+    lap.outlierReasons.some((reason) => !includeReasons[reason]);
+
+  let excludedCount = 0;
+
+  drivers.forEach((d) => {
+    d.stops = d.stints.length - 1;
+    d.stints.forEach((s, idx) => {
+      const before = s.laps.length;
+      s.laps = s.laps.filter((l) => !shouldExclude(l));
+      s.stintIndex = idx;
+      excludedCount += before - s.laps.length;
+    });
+    const flatTimes = d.stints.flatMap((s) => s.laps.map((l) => l.time));
+    d.flatTimes = flatTimes;
+    d.mean = d3.mean(flatTimes);
+    d.q25 = d3.quantile(flatTimes.slice().sort(d3.ascending), 0.25);
+    d.q50 = d3.quantile(flatTimes.slice().sort(d3.ascending), 0.5);
+    d.q75 = d3.quantile(flatTimes.slice().sort(d3.ascending), 0.75);
+    d.min = d3.min(flatTimes);
+    d.max = d3.max(flatTimes);
+  });
+
+  drivers = drivers.filter((d) => d.flatTimes.length > 0);
+  drivers.sort((a, b) => a.mean - b.mean);
+
+  return { drivers, excludedCount };
+}
+
+// ---------------------------------------------------------------
+// Render principal
+// ---------------------------------------------------------------
+async function loadAndRender() {
+  const apiBase = document.getElementById("apiBase").value.replace(/\/$/, "");
+  const raceId = document.getElementById("raceId").value;
+  const includeReasons = {
+    first_lap: document.getElementById("includeFirstLap").checked,
+    pit: document.getElementById("includePit").checked,
+    track_status: document.getElementById("includeTrackStatus").checked,
+  };
+  const statusEl = document.getElementById("status");
+  statusEl.textContent = "Cargando datos...";
+
+  let payload;
+  try {
+    const res = await fetch(`${apiBase}/api/analysis?module=pace_by_stint&race_id=${raceId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    payload = await res.json();
+  } catch (err) {
+    statusEl.textContent = `Error al cargar datos: ${err.message}. Verificá CORS_ALLOWED_ORIGINS en el backend.`;
+    return;
+  }
+
+  if (!payload.data || payload.data.length === 0) {
+    statusEl.textContent = "El módulo no devolvió stints (¿race_id correcto? ¿hay vueltas cargadas?).";
+    return;
+  }
+
+  const { drivers, excludedCount } = buildDriverData(payload.data, includeReasons);
+  statusEl.textContent = excludedCount > 0
+    ? `${excludedCount} vuelta(s) excluida(s) según los filtros marcados.`
+    : "";
+  drawChart(drivers);
+}
+
+function drawChart(drivers) {
+  const margin = { top: 70, right: 140, bottom: 40, left: 70 };
+  const laneWidth = 80;
+  const width = drivers.length * laneWidth;
+  const height = 560;
+  const rightColWidth = 90;
+
+  const svg = d3.select("#chart")
+    .attr("width", width + margin.left + margin.right + rightColWidth)
+    .attr("height", height + margin.top + margin.bottom);
+
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const allTimes = drivers.flatMap((d) => d.flatTimes);
+  const [minT, maxT] = d3.extent(allTimes);
+  const pad = (maxT - minT) * 0.06;
+
+  const y = d3.scaleLinear()
+    .domain([minT - pad, maxT + pad])
+    .range([height, 0]);
+
+  const x = d3.scalePoint()
+    .domain(drivers.map((d) => d.driver))
+    .range([laneWidth / 2, width - laneWidth / 2]);
+
+  g.append("g")
+    .attr("class", "axis")
+    .call(d3.axisLeft(y).ticks(6).tickFormat(formatLapTime));
+
+  g.append("g")
+    .attr("class", "axis")
+    .attr("transform", `translate(0,${height})`)
+    .call(d3.axisBottom(x).tickSize(0).tickFormat(""));
+
+  const laneHalf = laneWidth / 2 - 6;
+
+  drivers.forEach((driver) => {
+    const cx = x(driver.driver);
+    const color = teamColor(driver.team);
+
+    // --- Bandas de cuartiles (4 tramos, claro=rápido -> oscuro=lento) ---
+    const bands = [
+      [driver.min, driver.q25, 0.15],
+      [driver.q25, driver.q50, 0.30],
+      [driver.q50, driver.q75, 0.45],
+      [driver.q75, driver.max, 0.60],
+    ];
+    bands.forEach(([lo, hi, opacity]) => {
+      g.append("rect")
+        .attr("x", cx - laneHalf)
+        .attr("width", laneHalf * 2)
+        .attr("y", y(hi))
+        .attr("height", Math.max(0, y(lo) - y(hi)))
+        .attr("fill", color)
+        .attr("fill-opacity", opacity);
+    });
+
+    // --- Bordes del boxplot modificado (Q25 / Q75) ---
+    [driver.q25, driver.q75].forEach((val) => {
+      g.append("line")
+        .attr("class", "box-edge")
+        .attr("x1", cx - laneHalf)
+        .attr("x2", cx + laneHalf)
+        .attr("y1", y(val))
+        .attr("y2", y(val))
+        .attr("stroke", "#333");
+    });
+
+    // --- Línea de la media ---
+    g.append("line")
+      .attr("class", "mean-line")
+      .attr("x1", cx - laneHalf)
+      .attr("x2", cx + laneHalf)
+      .attr("y1", y(driver.mean))
+      .attr("y2", y(driver.mean))
+      .attr("stroke", color);
+
+    // --- Cabecera: media y paradas ---
+    g.append("text")
+      .attr("class", "header-mean")
+      .attr("x", cx)
+      .attr("y", -46)
+      .text(formatLapTime(driver.mean));
+
+    g.append("text")
+      .attr("class", "header-stops")
+      .attr("x", cx)
+      .attr("y", -30)
+      .text(`${driver.stops} stop${driver.stops === 1 ? "" : "s"}`);
+
+    // --- Puntos, separados por stint (jitter horizontal) ---
+    const numStints = driver.stints.length;
+    const subLaneWidth = (laneHalf * 2) / numStints;
+
+    driver.stints.forEach((stint) => {
+      const subCenter = cx - laneHalf + subLaneWidth * (stint.stintIndex + 0.5);
+      const inner = subLaneWidth * 0.7;
+
+      stint.laps.forEach((lap) => {
+        const px = subCenter + (Math.random() * 2 - 1) * (inner / 2);
+        const py = y(lap.time);
+
+        const symbolGen = d3.symbol().type(d3.symbolCircle).size(90);
+
+        g.append("path")
+          .attr("d", symbolGen())
+          .attr("transform", `translate(${px},${py})`)
+          .attr("fill", compoundColor(lap.compound))
+          .attr("fill-opacity", 0.9)
+          .attr("stroke", color)
+          .attr("stroke-width", 1.2);
+
+        g.append("text")
+          .attr("class", "lap-label")
+          .attr("x", px)
+          .attr("y", py)
+          .text(lap.lap);
+      });
+    });
+  });
+
+  // --- Etiquetas de piloto ---
+  g.selectAll(".driver-label")
+    .data(drivers)
+    .enter()
+    .append("text")
+    .attr("class", "driver-label")
+    .attr("x", (d) => x(d.driver))
+    .attr("y", height + 26)
+    .attr("fill", (d) => teamColor(d.team))
+    .text((d) => d.driver);
+
+  drawTeamPercentColumn(svg, drivers, y, margin, width, height, rightColWidth);
+}
+
+// ---------------------------------------------------------------
+// Columna lateral: % de vueltas por equipo en bins de 0.25s
+// ---------------------------------------------------------------
+function drawTeamPercentColumn(svg, drivers, y, margin, width, height, rightColWidth) {
+  const colX = margin.left + width + 30;
+  const binSize = 0.25;
+  const allLaps = drivers.flatMap((d) =>
+    d.stints.flatMap((s) => s.laps.map((l) => ({ time: l.time, team: d.team })))
+  );
+  if (allLaps.length === 0) return;
+
+  const [minT, maxT] = d3.extent(allLaps, (l) => l.time);
+  const binStart = Math.floor(minT / binSize) * binSize;
+  const binCount = Math.ceil((maxT - binStart) / binSize) + 1;
+
+  const teams = Array.from(new Set(drivers.map((d) => d.team)));
+  const g = svg.append("g").attr("transform", `translate(${colX},${margin.top})`);
+
+  for (let i = 0; i < binCount; i++) {
+    const lo = binStart + i * binSize;
+    const hi = lo + binSize;
+    const lapsInBin = allLaps.filter((l) => l.time >= lo && l.time < hi);
+    if (lapsInBin.length === 0) continue;
+
+    let acc = 0;
+    teams.forEach((team) => {
+      const count = lapsInBin.filter((l) => l.team === team).length;
+      if (count === 0) return;
+      const frac = count / lapsInBin.length;
+      g.append("rect")
+        .attr("x", acc * rightColWidth)
+        .attr("y", y(hi))
+        .attr("width", frac * rightColWidth)
+        .attr("height", Math.max(1, y(lo) - y(hi)))
+        .attr("fill", teamColor(team));
+      acc += frac;
+    });
+  }
+}
+
+document.getElementById("loadBtn").addEventListener("click", loadAndRender);
+</script>
+</body>
+</html>
