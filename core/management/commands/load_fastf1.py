@@ -81,6 +81,15 @@ class Command(BaseCommand):
                         else None
                     )
 
+                    # una vuelta es "de pits" si entra o sale del pit lane en ella
+                    is_pit = pd.notna(lap.get("PitInTime")) or pd.notna(lap.get("PitOutTime"))
+
+                    # TrackStatus puede venir como NaN o como string de códigos (ej: "1", "24")
+                    track_status_raw = lap.get("TrackStatus")
+                    track_status = (
+                        str(track_status_raw) if pd.notna(track_status_raw) else ""
+                    )
+
                     _, created = Lap.objects.update_or_create(
                         driver=driver,
                         race=race,
@@ -89,7 +98,8 @@ class Command(BaseCommand):
                             "stint": stint,
                             "lap_time": lap_time,
                             "compound": lap["Compound"] or "",
-                            "is_pit": pd.notna(lap["PitOutTime"]),
+                            "is_pit": is_pit,
+                            "track_status": track_status,
                         },
                     )
                     if created:

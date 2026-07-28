@@ -42,6 +42,11 @@ class Stint(models.Model):
 
 
 class Lap(models.Model):
+    # Códigos de TrackStatus de FastF1 que indican una condición de pista
+    # no representativa del ritmo real (bandera amarilla, SC, VSC, roja).
+    # Referencia: FastF1 session.track_status ("1" = pista limpia/verde).
+    NON_GREEN_TRACK_STATUS_CODES = {"2", "4", "5", "6", "7"}
+
     driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name="laps")
     race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="laps")
     stint = models.ForeignKey(Stint, null=True, blank=True, on_delete=models.SET_NULL, related_name="laps")
@@ -50,7 +55,13 @@ class Lap(models.Model):
     lap_time = models.FloatField(null=True, blank=True)
     compound = models.CharField(max_length=20, blank=True)
 
+    # True si la vuelta es de entrada o salida de pits (PitInTime o PitOutTime
+    # presentes en FastF1). No es una "vuelta completa" representativa del ritmo.
     is_pit = models.BooleanField(default=False)
+
+    # Códigos de estado de pista de FastF1 concatenados tal cual vienen
+    # (ej: "1", "24", "6"). Vacío si no se pudo determinar.
+    track_status = models.CharField(max_length=20, blank=True, default="")
 
     # opcional (para el módulo pace_adjusted)
     gap_to_front = models.FloatField(null=True, blank=True)
@@ -70,3 +81,29 @@ class Lap(models.Model):
 
     def __str__(self):
         return f"{self.driver.code} - {self.race.name} - vuelta {self.lap_number}"
+
+    @property
+    def outlier_reasons(self):
+        """
+        Devuelve la lista de motivos por los que esta vuelta podría considerarse
+        no representativa del ritmo de carrera. Lista vacía = vuelta "limpia".
+        """
+        reasons = []
+
+        if self.lap_number == 1:
+            reasons.append("first_lap")
+
+        if self.is_pit:
+            reasons.append("pit")
+
+        if self.track_status and any(
+            code in self.NON_GREEN_TRACK_STATUS_CODES for code in self.track_status
+        ):
+            reasons.append("track_status")
+
+        return reasons
+
+    @property
+    def is_outlier(self):
+        """True si la vuelta tiene al menos un motivo para ser excluida del análisis de ritmo."""
+        return len(self.outlier_reasons) > 0

@@ -14,11 +14,18 @@ logger = logging.getLogger(__name__)
 class PaceByStint(BaseAnalysisModule):
     name = "pace_by_stint"
 
+    MIN_LAPS_FOR_STATS = 3
+
     def get_queryset(self, filters):
+        # Nota: ya NO se excluyen acá las vueltas de pits / outliers.
+        # Se devuelven todas las vueltas válidas (con tiempo registrado) y cada
+        # una viaja con su flag is_outlier + outlier_reasons, para que el
+        # frontend decida si incluirlas o no.
         qs = Lap.objects.select_related(
             "driver", "driver__team", "race", "stint"
         ).filter(
-            race_id=filters["race_id"]
+            race_id=filters["race_id"],
+            lap_time__isnull=False,
         )
 
         if filters.get("driver"):
@@ -29,12 +36,6 @@ class PaceByStint(BaseAnalysisModule):
 
         if filters.get("compound"):
             qs = qs.filter(compound__in=filters["compound"])
-
-        # excluir vueltas inválidas
-        qs = qs.filter(
-            lap_time__isnull=False,
-            is_pit=False
-        )
 
         return qs.order_by("driver__code", "stint__stint_number", "lap_number")
 
@@ -52,20 +53,23 @@ class PaceByStint(BaseAnalysisModule):
             grouped[key].append(lap)
 
         result = []
+        total_outliers = 0
 
         for (driver_code, stint_number), laps in grouped.items():
-            lap_times = np.array([lap.lap_time for lap in laps])
-
-            if len(lap_times) < 3:
+            if len(laps) < self.MIN_LAPS_FOR_STATS:
                 continue  # ignorar stints muy cortos
 
-            lap_numbers = np.array([lap.lap_number for lap in laps])
+            # las métricas de ritmo (mean/consistency/degradation) se calculan
+            # sobre las vueltas "limpias"; si no alcanzan, se usa el set completo
+            clean_laps = [lap for lap in laps if not lap.is_outlier]
+            reference_laps = clean_laps if len(clean_laps) >= self.MIN_LAPS_FOR_STATS else laps
 
-            # métricas
+            lap_times = np.array([lap.lap_time for lap in reference_laps])
+            lap_numbers = np.array([lap.lap_number for lap in reference_laps])
+
             mean_pace = lap_times.mean()
             std_dev = lap_times.std()
 
-            # degradación (pendiente)
             try:
                 slope = np.polyfit(lap_numbers, lap_times, 1)[0]
             except Exception:
@@ -74,6 +78,9 @@ class PaceByStint(BaseAnalysisModule):
                     driver_code, stint_number
                 )
                 slope = 0
+
+            stint_outliers = sum(1 for lap in laps if lap.is_outlier)
+            total_outliers += stint_outliers
 
             result.append({
                 "driver": driver_code,
@@ -89,14 +96,17 @@ class PaceByStint(BaseAnalysisModule):
                         "lap": lap.lap_number,
                         "time": lap.lap_time,
                         # gap al auto de adelante (para clasificar tráfico en el frontend)
-                        "gap_to_front": lap.gap_to_front
+                        "gap_to_front": lap.gap_to_front,
+                        # marca si la vuelta no es representativa del ritmo real
+                        "is_outlier": lap.is_outlier,
+                        "outlier_reasons": lap.outlier_reasons,
                     } for lap in laps
                 ]
             })
 
         logger.info(
-            "pace_by_stint: race_id=%s -> %s stints procesados",
-            filters.get("race_id"), len(result)
+            "pace_by_stint: race_id=%s -> %s stints procesados, %s vuelta(s) marcada(s) como outlier",
+            filters.get("race_id"), len(result), total_outliers
         )
 
         return result

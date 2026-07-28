@@ -30,6 +30,6 @@ class StintAdmin(admin.ModelAdmin):
 
 @admin.register(Lap)
 class LapAdmin(admin.ModelAdmin):
-    list_display = ("race", "driver", "lap_number", "lap_time", "compound", "is_pit")
+    list_display = ("race", "driver", "lap_number", "lap_time", "compound", "is_pit", "track_status", "is_outlier")
     list_filter = ("race", "compound", "is_pit")
     search_fields = ("driver__code",)
