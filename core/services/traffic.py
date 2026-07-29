@@ -57,13 +57,20 @@ def build_distance_time_curve(session, driver_code):
     ordenados por tiempo, con distancia estrictamente no decreciente (apta
     para np.interp). Arrays vacíos si no hay telemetría disponible.
     """
-    driver_laps = _pick_driver_laps(session.laps, driver_code)
+    driver_laps = _pick_driver_laps(session.laps, driver_code).sort_values("LapNumber")
 
     distances = []
     times = []
     cumulative_offset = 0.0
 
-    for _, lap in driver_laps.sort_values("LapNumber").iterrows():
+    # IMPORTANTE: se itera con .iloc[] y no con .iterrows(). .iterrows() de
+    # pandas siempre devuelve cada fila como un Series genérico, aunque el
+    # DataFrame sea un fastf1.core.Laps, así que "lap" pierde métodos propios
+    # de fastf1.core.Lap como get_car_data() (AttributeError silencioso,
+    # atrapado por el except de abajo). .iloc[] sí preserva el tipo, porque
+    # usa el _constructor_sliced que define FastF1 en su clase Laps.
+    for i in range(len(driver_laps)):
+        lap = driver_laps.iloc[i]
         try:
             car_data = lap.get_car_data().add_distance()
         except Exception:
@@ -176,7 +183,8 @@ def compute_traffic_by_driver(session):
         driver_laps = _pick_driver_laps(session.laps, code)
 
         per_lap = {}
-        for _, lap in driver_laps.iterrows():
+        for i in range(len(driver_laps)):
+            lap = driver_laps.iloc[i]
             if pd.isna(lap.get("LapStartTime")) or pd.isna(lap.get("Time")):
                 continue
 

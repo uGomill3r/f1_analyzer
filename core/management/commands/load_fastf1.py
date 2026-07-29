@@ -99,6 +99,19 @@ class Command(BaseCommand):
             )
             traffic_by_driver = {}
 
+        # Resumen visible por stdout (no solo por logging: si el logger de
+        # core.services.traffic no tiene handler configurado en settings.py,
+        # sus INFO/WARNING no se ven en consola y un fallo silencioso pasa
+        # desapercibido).
+        laps_with_traffic = sum(len(v) for v in traffic_by_driver.values())
+        if laps_with_traffic == 0:
+            self.stdout.write(self.style.WARNING(
+                "No se pudo calcular traffic_pct para ninguna vuelta "
+                "(telemetría no disponible o fallo silencioso; revisá los logs)."
+            ))
+        else:
+            self.stdout.write(f"Tráfico calculado para {laps_with_traffic} vuelta(s) en total.")
+
         created_laps = 0
         updated_laps = 0
 

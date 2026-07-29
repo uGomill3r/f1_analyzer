@@ -180,6 +180,14 @@ http://127.0.0.1:8000/api/analysis?module=pace_by_stint&race_id=1
 - Consistencia
 - Degradación básica
 
+### 🔹 laps_in_traffic
+
+- Heatmap piloto x vuelta: % de cada vuelta con gap < 2s al auto de adelante
+- Un piloto se marca "en tráfico" si supera el 33% de la vuelta en esa condición
+- No incluye vueltas bajo SC / VSC (excluidas explícitamente por especificación)
+- Requiere telemetría de FastF1 (`car_data`); se calcula en `load_fastf1` y se
+  persiste en `Lap.traffic_pct` / `Lap.gap_to_front` (ver `core/services/traffic.py`)
+
 ### 🔹 tyre_degradation_advanced
 
 - Segmentación del stint (warmup, estable, drop-off)
