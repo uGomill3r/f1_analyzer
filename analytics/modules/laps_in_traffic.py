@@ -15,9 +15,12 @@ class LapsInTraffic(BaseAnalysisModule):
     para el cálculo (telemetría FastF1) y Lap.IN_TRAFFIC_THRESHOLD_PCT para
     el umbral de clasificación (33%).
 
-    Nota: no incluye vueltas completadas bajo SC / VSC / bandera (traffic_pct
-    queda en None para esas vueltas desde la ingesta, ver load_fastf1.py), ni
-    vueltas sin telemetría suficiente para calcular el gap.
+    Las vueltas completadas bajo SC / VSC / bandera no tienen traffic_pct
+    (se excluyen desde la ingesta, ver load_fastf1.py) pero SÍ se incluyen
+    en la respuesta con track_status_label (ej: "SC", "VSC", "Y", "R") para
+    que el frontend pueda señalizarlas en vez de dejarlas como un hueco sin
+    explicación. Solo quedan afuera las vueltas sin traffic_pct NI motivo de
+    track_status (típicamente, telemetría insuficiente para calcular el gap).
     """
 
     name = "laps_in_traffic"
@@ -28,7 +31,6 @@ class LapsInTraffic(BaseAnalysisModule):
         ).filter(
             race_id=filters["race_id"],
             lap_time__isnull=False,
-            traffic_pct__isnull=False,  # excluye SC/VSC y vueltas sin telemetría
         )
 
         if filters.get("driver"):
@@ -43,24 +45,42 @@ class LapsInTraffic(BaseAnalysisModule):
 
     def transform(self, qs, filters):
         by_driver = {}
+        track_status_laps = 0
+        skipped_laps = 0
 
         for lap in qs:
+            track_status_label = lap.track_status_label
+
+            # Sin traffic_pct y sin motivo de track_status: típicamente
+            # telemetría insuficiente para calcular el gap. No aporta nada
+            # al heatmap, se descarta (queda como hueco en blanco).
+            if lap.traffic_pct is None and track_status_label is None:
+                skipped_laps += 1
+                continue
+
             entry = by_driver.setdefault(lap.driver.code, {
                 "driver": lap.driver.code,
                 "team": lap.driver.team.name,
                 "laps": [],
             })
-            entry["laps"].append({
+
+            lap_entry = {
                 "lap": lap.lap_number,
-                "traffic_pct": round(lap.traffic_pct, 1),
+                "traffic_pct": round(lap.traffic_pct, 1) if lap.traffic_pct is not None else None,
                 "in_traffic": lap.in_traffic,
-            })
+                "track_status_label": track_status_label,
+            }
+            entry["laps"].append(lap_entry)
+
+            if track_status_label is not None:
+                track_status_laps += 1
 
         result = list(by_driver.values())
 
         logger.info(
-            "laps_in_traffic: race_id=%s -> %s piloto(s) con datos de tráfico",
-            filters.get("race_id"), len(result),
+            "laps_in_traffic: race_id=%s -> %s piloto(s), %s vuelta(s) con track_status, "
+            "%s vuelta(s) descartadas (sin traffic_pct ni track_status)",
+            filters.get("race_id"), len(result), track_status_laps, skipped_laps,
         )
 
         return result

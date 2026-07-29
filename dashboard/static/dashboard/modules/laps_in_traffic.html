@@ -9,6 +9,7 @@
     --bg: #f2f2f0;
     --ink: #1c1c1c;
     --muted: #6b6b6b;
+    --track-status: #f2c744;
   }
   body {
     background: var(--bg);
@@ -44,6 +45,9 @@
     dominant-baseline: central;
     pointer-events: none;
   }
+  .cell-label.track-status {
+    font-weight: 700;
+  }
   #status {
     color: var(--muted);
     font-size: 13px;
@@ -55,7 +59,19 @@
     margin-top: 14px;
     display: flex;
     align-items: center;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+  #legend .item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #legend .swatch {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    border: 1px solid #999;
   }
   #legend-gradient {
     display: block;
@@ -65,14 +81,15 @@
 <body>
 
   <h1>Laps in traffic</h1>
-  <div class="subtitle">% de cada vuelta con gap &lt; 2s al auto de adelante (no incluye vueltas bajo SC / VSC)</div>
+  <div class="subtitle">% de cada vuelta con gap &lt; 2s al auto de adelante</div>
 
   <div id="status"></div>
   <svg id="chart"></svg>
 
   <div id="legend">
-    <span>% de vuelta en tráfico:</span>
+    <span class="item">% de vuelta en tráfico:</span>
     <svg id="legend-gradient" width="220" height="34"></svg>
+    <span class="item"><span class="swatch" style="background:var(--track-status)"></span>SC / VSC / bandera (Y, SC, VSC, R)</span>
   </div>
 
 <script>
@@ -113,7 +130,10 @@ function teamColor(teamName) {
   return TEAM_COLORS[teamName] || fallbackColorScale(teamName);
 }
 
-// Escala de color de las celdas: blanco (0%) -> rojo oscuro (100%).
+// Color fijo para vueltas bajo SC/VSC/bandera (track_status_label presente).
+const TRACK_STATUS_COLOR = "#f2c744";
+
+// Escala de color de las celdas normales: blanco (0%) -> rojo oscuro (100%).
 const cellColor = d3.scaleSequential(d3.interpolateReds).domain([0, 100]);
 
 // Umbral de luminosidad de la celda a partir del cual el texto pasa a
@@ -138,9 +158,10 @@ let raceId = null;
 // ---------------------------------------------------------------
 // Orden de pilotos: el backend (analytics/modules/laps_in_traffic.py) no
 // expone posición final de carrera, así que se usa como aproximación la
-// cantidad de vueltas con dato de tráfico (descendente) — quien completó
-// más vueltas queda más arriba, como proxy de la clasificación real.
-// No es exactamente el orden de llegada del gráfico de referencia.
+// cantidad de vueltas con dato (traffic_pct o track_status) descendente —
+// quien completó más vueltas queda más arriba, como proxy de la
+// clasificación real. No es exactamente el orden de llegada del gráfico
+// de referencia.
 // ---------------------------------------------------------------
 function sortDrivers(drivers) {
   return [...drivers].sort((a, b) => b.laps.length - a.laps.length);
@@ -195,7 +216,8 @@ function drawChart(drivers, maxLap) {
   const x = d3.scaleLinear().domain([1, maxLap + 1]).range([0, width]);
   const y = d3.scaleBand().domain(drivers.map((d) => d.driver)).range([0, height]);
 
-  // Eje superior: número de vuelta cada 5 (1, 5, 10, 15, ...), igual que el gráfico de referencia.
+  // Eje superior/inferior: número de vuelta cada 5 (1, 5, 10, 15, ...), igual
+  // que el gráfico de referencia.
   const lapTicks = [1, ...d3.range(5, maxLap + 1, 5)];
 
   g.append("g")
@@ -221,29 +243,32 @@ function drawChart(drivers, maxLap) {
     .attr("fill", (d) => teamColor(d.team))
     .text((d) => d.driver);
 
-  // --- Celdas del heatmap: una por vuelta con dato de tráfico disponible.
-  // Las vueltas sin dato (bajo SC/VSC, o sin telemetría suficiente) quedan
-  // sin celda, igual que los huecos en blanco del gráfico de referencia. ---
+  // --- Celdas del heatmap ---
+  // Una celda por vuelta con dato disponible: traffic_pct (escala roja) o
+  // track_status_label (amarillo fijo, vuelta bajo SC/VSC/bandera). Las
+  // vueltas sin ninguno de los dos (telemetría insuficiente) ya vienen
+  // descartadas desde el backend y quedan como hueco en blanco.
   drivers.forEach((driver) => {
     const row = g.append("g");
 
     driver.laps.forEach((lap) => {
       const cx = x(lap.lap);
       const cy = y(driver.driver);
+      const isTrackStatus = lap.track_status_label !== null && lap.track_status_label !== undefined;
 
       row.append("rect")
         .attr("x", cx)
         .attr("y", cy)
         .attr("width", cellWidth - 1)
         .attr("height", cellHeight - 1)
-        .attr("fill", cellColor(lap.traffic_pct));
+        .attr("fill", isTrackStatus ? TRACK_STATUS_COLOR : cellColor(lap.traffic_pct));
 
       row.append("text")
-        .attr("class", "cell-label")
+        .attr("class", isTrackStatus ? "cell-label track-status" : "cell-label")
         .attr("x", cx + (cellWidth - 1) / 2)
         .attr("y", cy + (cellHeight - 1) / 2)
-        .attr("fill", cellTextColor(lap.traffic_pct))
-        .text(formatPct(lap.traffic_pct));
+        .attr("fill", isTrackStatus ? "#1c1c1c" : cellTextColor(lap.traffic_pct))
+        .text(isTrackStatus ? lap.track_status_label : formatPct(lap.traffic_pct));
     });
   });
 }

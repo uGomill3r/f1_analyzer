@@ -96,6 +96,21 @@ class Lap(models.Model):
     # Referencia: FastF1 session.track_status ("1" = pista limpia/verde).
     NON_GREEN_TRACK_STATUS_CODES = {"2", "4", "5", "6", "7"}
 
+    # Sigla corta por código de TrackStatus, para señalizar en charts (ej:
+    # heatmap de laps_in_traffic) el motivo de una vuelta sin traffic_pct.
+    TRACK_STATUS_LABELS = {
+        "2": "Y",    # Yellow flag
+        "4": "SC",   # Safety Car
+        "5": "R",    # Red flag
+        "6": "VSC",  # Virtual Safety Car
+        "7": "VSC",  # Virtual Safety Car ending
+    }
+
+    # Orden de severidad para elegir UNA sola sigla cuando una vuelta trae
+    # varios códigos concatenados (ej: "24" = Yellow seguido de SC): se
+    # muestra el más severo/representativo, no todos.
+    TRACK_STATUS_PRIORITY = ["5", "4", "6", "7", "2"]
+
     # Umbral del chart "Laps in traffic": un piloto se considera "en tráfico"
     # si pasó más de este % de la vuelta a menos de TRAFFIC_GAP_THRESHOLD_SECONDS
     # (ver core/services/traffic.py) del auto de adelante.
@@ -181,3 +196,20 @@ class Lap(models.Model):
         if self.traffic_pct is None:
             return None
         return self.traffic_pct > self.IN_TRAFFIC_THRESHOLD_PCT
+
+    @property
+    def track_status_label(self):
+        """
+        Sigla del estado de pista más severo presente en esta vuelta (ej:
+        "SC", "VSC", "Y", "R"), según TRACK_STATUS_PRIORITY. None si la
+        vuelta es "verde" (sin códigos no-verdes) o si no hay track_status
+        registrado.
+        """
+        if not self.track_status:
+            return None
+
+        for code in self.TRACK_STATUS_PRIORITY:
+            if code in self.track_status:
+                return self.TRACK_STATUS_LABELS[code]
+
+        return None
