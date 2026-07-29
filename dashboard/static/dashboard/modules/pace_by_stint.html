@@ -171,6 +171,22 @@ function compoundColor(compound) {
   return COMPOUND_COLORS[compound.toUpperCase()] || "#999";
 }
 
+// ---------------------------------------------------------------
+// Jitter horizontal determinístico: usamos un hash de string como seed
+// en vez de Math.random(), para que cada vuelta siempre caiga en la
+// misma posición horizontal sin importar cuántas veces se redibuje el
+// gráfico (evita el efecto de "oscilación" al recibir filtros repetidos).
+// ---------------------------------------------------------------
+function seededJitter(seedStr) {
+  let h = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) {
+    h ^= seedStr.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  // normaliza a [0, 1)
+  return ((h >>> 0) % 100000) / 100000;
+}
+
 function formatLapTime(secs) {
   const m = Math.floor(secs / 60);
   const s = (secs % 60).toFixed(3);
@@ -538,7 +554,8 @@ function drawChart(drivers) {
       const inner = subLaneWidth * 0.7;
 
       stint.laps.forEach((lap) => {
-        const px = subCenter + (Math.random() * 2 - 1) * (inner / 2);
+        const seed = `${driver.driver}-S${stint.stintNumber}-L${lap.lap}`;
+        const px = subCenter + (seededJitter(seed) * 2 - 1) * (inner / 2);
         const py = y(lap.time);
 
         const symbolGen = d3.symbol().type(d3.symbolCircle).size(90);
