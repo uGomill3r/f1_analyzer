@@ -4,7 +4,7 @@ from django.conf import settings
 from django.views.generic import TemplateView
 
 from analytics.modules.registry import MODULES
-from core.models import Race
+from core.models import Driver, Lap, Race, RaceResult
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 MODULE_PAGES = {
     "pace_by_stint": "dashboard/modules/pace_by_stint.html",
     "laps_in_traffic": "dashboard/modules/laps_in_traffic.html",
+    "pace_gap_comparison": "dashboard/modules/pace_gap_comparison.html",
 }
 DEFAULT_MODULE_PAGE = "dashboard/modules/blank.html"
 
@@ -23,7 +24,50 @@ MODULE_LABELS = {
     "tyre_degradation_advanced": "Degradación de neumáticos (avanzada)",
     "pace_adjusted": "Pace ajustado",
     "laps_in_traffic": "Vueltas en tráfico (heatmap)",
+    "pace_gap_comparison": "Comparación de ritmo (2 pilotos)",
 }
+
+
+def _drivers_by_race(races):
+    """
+    Roster de pilotos por carrera (código + equipo), ordenado por posición
+    final real cuando está disponible (mismo criterio que laps_in_traffic).
+
+    Se arma acá, en el frontend base, y no esperando a que el iframe de un
+    módulo lo reporte por postMessage (como hace pace_by_stint): el menú de
+    "Comparación de ritmo (2 pilotos)" necesita mostrar los chips de pilotos
+    ANTES de que exista una selección con la que consultar /api/analysis, así
+    que no hay forma de resolver ese roster desde la respuesta de un módulo.
+
+    Nota de rendimiento: hace 2 queries por carrera (N+1). Para la escala
+    actual de la app (herramienta de análisis, no alto tráfico) es aceptable;
+    si el número de carreras cargadas crece mucho, conviene resolverlo con
+    una sola consulta agregada.
+    """
+    result = {}
+
+    for race in races:
+        driver_ids = Lap.objects.filter(race=race).values_list("driver_id", flat=True).distinct()
+        drivers = Driver.objects.filter(id__in=driver_ids).select_related("team")
+        positions = dict(
+            RaceResult.objects.filter(race=race).values_list("driver__code", "position")
+        )
+
+        roster = [
+            {
+                "code": d.code,
+                "team": d.team.name,
+                "final_position": positions.get(d.code),
+            }
+            for d in drivers
+        ]
+        roster.sort(key=lambda d: (d["final_position"] is None, d["final_position"] or 0))
+
+        result[race.id] = [
+            {"code": d["code"], "team": d["team"]} for d in roster
+        ]
+
+    return result
 
 
 class DashboardView(TemplateView):
@@ -42,6 +86,8 @@ class DashboardView(TemplateView):
         context = super().get_context_data(**kwargs)
 
         races = Race.objects.all().order_by("year", "round_number", "session_type")
+        drivers_by_race = _drivers_by_race(races)
+
         races_payload = [
             {
                 "id": race.id,
@@ -51,6 +97,7 @@ class DashboardView(TemplateView):
                 "gp_name": race.gp_name,
                 "session_type": race.session_type,
                 "session_type_label": race.get_session_type_display(),
+                "drivers": drivers_by_race.get(race.id, []),
             }
             for race in races
         ]

@@ -175,6 +175,25 @@ class Lap(models.Model):
     # las vueltas completadas bajo SC o VSC).
     traffic_pct = models.FloatField(null=True, blank=True)
 
+    # --- Campos para comparación de ritmo entre 2 pilotos (analytics/modules/pace_gap_comparison.py) ---
+
+    # Tiempo de sesión (segundos, absoluto) en el instante en que el piloto
+    # cruzó la línea de meta al completar esta vuelta. Sale directo de
+    # session.laps["Time"] de FastF1 (mismo eje que DriverTelemetryCurve.session_time).
+    session_time_end = models.FloatField(
+        null=True, blank=True,
+        help_text="Segundos de sesión (absolutos) al completar esta vuelta.",
+    )
+
+    # Distancia acumulada (metros) del piloto en la sesión al completar esta
+    # vuelta. Se interpola sobre la propia curva distancia-tiempo del piloto
+    # (DriverTelemetryCurve) usando session_time_end. None si no hay
+    # telemetría suficiente para ese piloto.
+    cum_distance_end = models.FloatField(
+        null=True, blank=True,
+        help_text="Metros acumulados en la sesión al completar esta vuelta.",
+    )
+
     class Meta:
         ordering = ["race", "driver", "lap_number"]
         constraints = [
@@ -244,3 +263,46 @@ class Lap(models.Model):
                 return self.TRACK_STATUS_LABELS[code]
 
         return None
+
+
+class DriverTelemetryCurve(models.Model):
+    """
+    Curva completa distancia-tiempo de un piloto en una sesión (ver
+    core/services/traffic.py:build_distance_time_curve), persistida durante
+    load_fastf1 para poder calcular en tiempo de consulta el gap real (por
+    posición real en pista, no por número de vuelta) entre dos pilotos
+    arbitrarios, sin volver a descargar telemetría de FastF1.
+
+    distance / session_time son listas paralelas del mismo largo: para el
+    índice i, el piloto estaba en distance[i] metros acumulados de la sesión
+    en el instante session_time[i] (segundos de sesión, mismo eje que
+    Lap.session_time_end). analytics/modules/pace_gap_comparison.py usa
+    np.interp sobre estos arrays para ubicar en qué instante un piloto pasó
+    por la distancia que otro piloto tenía al terminar una vuelta dada.
+
+    Nota de diseño: se usa JSONField (no ArrayField de Postgres) a propósito,
+    para mantener compatibilidad con el fallback a SQLite en desarrollo que
+    describe el README. Si el proyecto pasa a ser Postgres-only, cambiar a
+    ArrayField(FloatField()) sería más eficiente en espacio y en consulta
+    para este mismo dato.
+    """
+
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name="telemetry_curves")
+    race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="telemetry_curves")
+
+    distance = models.JSONField(
+        help_text="Lista de floats: metros acumulados en la sesión (mismo largo que session_time)."
+    )
+    session_time = models.JSONField(
+        help_text="Lista de floats: segundos de sesión, mismo eje que Lap.session_time_end."
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["driver", "race"], name="unique_curve_per_driver_race"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.driver.code} - {self.race} - curva ({len(self.distance)} muestras)"

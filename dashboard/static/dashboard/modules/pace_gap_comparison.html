@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Comparación de ritmo — 2 pilotos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    --bg: #f2f2f0;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+  }
+  body {
+    background: var(--bg);
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: var(--ink);
+    margin: 0;
+    padding: 24px;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px 0; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .axis text { fill: var(--muted); font-size: 12px; }
+  .axis path, .axis line { stroke: #cfcabc; }
+  .lap-line { fill: none; stroke-width: 2.5; }
+  .lap-point { stroke-width: 1.2; }
+  .gap-label {
+    font-size: 10px;
+    font-family: "Courier New", monospace;
+    text-anchor: middle;
+  }
+  #status { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  #legend {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 10px;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  #legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  #legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+
+  <h1>Comparación de ritmo — vuelta a vuelta</h1>
+  <div class="subtitle" id="subtitle">Seleccioná 2 pilotos en el menú (☰) para comparar</div>
+
+  <div id="status"></div>
+  <svg id="chart"></svg>
+  <div id="legend"></div>
+
+<script>
+// ---------------------------------------------------------------
+// Esta página vive embebida en un <iframe> dentro del frontend base
+// (dashboard/templates/dashboard/base.html). La selección de los 2 pilotos
+// (chips, tope de 2) vive en el menú del frontend base, no acá; llega por
+// postMessage como driverPair: [codigoA, codigoB].
+// ---------------------------------------------------------------
+
+// Paleta duplicada intencionalmente de pace_by_stint.html: cada módulo es
+// un archivo estático independiente, sin un JS compartido entre iframes.
+const TEAM_COLORS = {
+  "Red Bull Racing": "#3671C6",
+  "Red Bull": "#3671C6",
+  "Ferrari": "#E8002D",
+  "Mercedes": "#27F4D2",
+  "McLaren": "#FF8000",
+  "Aston Martin": "#229971",
+  "Alpine": "#00A1E8",
+  "Williams": "#64C4FF",
+  "RB": "#6692FF",
+  "Racing Bulls": "#6692FF",
+  "Kick Sauber": "#52E252",
+  "Sauber": "#52E252",
+  "Audi": "#9B0000",
+  "Haas": "#B6BABD",
+  "Cadillac": "#8B6F47",
+};
+const fallbackColorScale = d3.scaleOrdinal(d3.schemeTableau10);
+
+function teamColor(teamName) {
+  return TEAM_COLORS[teamName] || fallbackColorScale(teamName);
+}
+
+function formatLapTime(secs) {
+  if (secs === null || secs === undefined) return "-";
+  const m = Math.floor(secs / 60);
+  const s = (secs % 60).toFixed(3);
+  return `${m}:${s.padStart(6, "0")}`;
+}
+
+function formatGap(gap) {
+  if (gap === null || gap === undefined) return null;
+  const sign = gap >= 0 ? "+" : "";
+  return `${sign}${gap.toFixed(2)}s`;
+}
+
+let apiBase = "http://127.0.0.1:8000";
+let raceId = null;
+let currentPair = null; // [codigoA, codigoB] actualmente graficado
+
+function setStatus(message) {
+  document.getElementById("status").textContent = message || "";
+}
+
+function clearChart() {
+  d3.select("#chart").selectAll("*").remove();
+  d3.select("#chart").attr("width", 0).attr("height", 0);
+  document.getElementById("legend").innerHTML = "";
+}
+
+async function loadAndRender(pair) {
+  if (!raceId || !pair || pair.length !== 2) return;
+
+  currentPair = pair;
+  setStatus("Cargando datos...");
+
+  let payload;
+  try {
+    const url = `${apiBase}/api/analysis?module=pace_gap_comparison&race_id=${raceId}` +
+      `&driver=${encodeURIComponent(pair[0])}&driver=${encodeURIComponent(pair[1])}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error((errBody && errBody.error) || `HTTP ${res.status}`);
+    }
+    payload = await res.json();
+  } catch (err) {
+    setStatus(`Error al cargar datos: ${err.message}`);
+    clearChart();
+    return;
+  }
+
+  if (!payload.laps || payload.laps.length === 0) {
+    setStatus("El módulo no devolvió vueltas para esos dos pilotos.");
+    clearChart();
+    return;
+  }
+
+  setStatus("");
+  drawChart(payload);
+}
+
+function drawLegend(payload) {
+  const legend = document.getElementById("legend");
+  legend.innerHTML = "";
+
+  const colorA = teamColor(payload.team_a);
+  const colorB = teamColor(payload.team_b);
+
+  const items = [
+    { label: `${payload.driver_a} (piloto A — referencia de distancia)`, color: colorA },
+    { label: `${payload.driver_b} (piloto B)`, color: colorB },
+  ];
+
+  items.forEach(({ label, color }) => {
+    const span = document.createElement("span");
+    span.className = "item";
+    span.innerHTML = `<span class="dot" style="background:${color}"></span>${label}`;
+    legend.appendChild(span);
+  });
+
+  const note = document.createElement("span");
+  note.className = "item";
+  note.textContent =
+    "Gap real (telemetría) al final de cada vuelta de A: + = B va detrás de A, − = B va adelante. " +
+    "Puntos atenuados = vuelta outlier (vuelta 1 / pit / SC-VSC).";
+  legend.appendChild(note);
+}
+
+function drawChart(payload) {
+  const laps = payload.laps;
+  const colorA = teamColor(payload.team_a);
+  const colorB = teamColor(payload.team_b);
+
+  document.getElementById("subtitle").textContent = `${payload.driver_a} vs ${payload.driver_b}`;
+  drawLegend(payload);
+
+  const margin = { top: 20, right: 40, bottom: 70, left: 70 };
+  const width = Math.max(600, laps.length * 34);
+  const height = 460;
+
+  const svg = d3.select("#chart")
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const allTimes = laps
+    .flatMap((l) => [l.lap_time_a, l.lap_time_b])
+    .filter((t) => t !== null && t !== undefined);
+  const [minT, maxT] = d3.extent(allTimes);
+  const pad = (maxT - minT) * 0.08 || 1;
+
+  const x = d3.scalePoint()
+    .domain(laps.map((l) => l.lap))
+    .range([20, width - 20]);
+
+  const y = d3.scaleLinear()
+    .domain([minT - pad, maxT + pad])
+    .range([height, 0]);
+
+  g.append("g")
+    .attr("class", "axis")
+    .call(d3.axisLeft(y).ticks(6).tickFormat(formatLapTime));
+
+  g.append("g")
+    .attr("class", "axis")
+    .attr("transform", `translate(0,${height})`)
+    .call(d3.axisBottom(x).tickFormat((d) => d));
+
+  function drawSeries(timeKey, outlierKey, color) {
+    const points = laps.filter((l) => l[timeKey] !== null && l[timeKey] !== undefined);
+
+    const line = d3.line()
+      .x((l) => x(l.lap))
+      .y((l) => y(l[timeKey]));
+
+    g.append("path")
+      .datum(points)
+      .attr("class", "lap-line")
+      .attr("d", line)
+      .attr("stroke", color);
+
+    g.selectAll(`.point-${timeKey}`)
+      .data(points)
+      .enter()
+      .append("circle")
+      .attr("class", `lap-point point-${timeKey}`)
+      .attr("cx", (l) => x(l.lap))
+      .attr("cy", (l) => y(l[timeKey]))
+      .attr("r", 4)
+      .attr("fill", color)
+      .attr("stroke", "#1c1c1c")
+      .attr("opacity", (l) => (l[outlierKey] ? 0.35 : 1));
+  }
+
+  drawSeries("lap_time_a", "is_outlier_a", colorA);
+  drawSeries("lap_time_b", "is_outlier_b", colorB);
+
+  // --- Gap real al final de cada vuelta, debajo del eje X ---
+  g.selectAll(".gap-label")
+    .data(laps.filter((l) => l.gap_seconds !== null && l.gap_seconds !== undefined))
+    .enter()
+    .append("text")
+    .attr("class", "gap-label")
+    .attr("x", (l) => x(l.lap))
+    .attr("y", height + 20)
+    .attr("fill", (l) => (l.gap_seconds >= 0 ? colorA : colorB))
+    .text((l) => formatGap(l.gap_seconds));
+}
+
+// ---------------------------------------------------------------
+// Mensajes entrantes desde el frontend base: selección de pilotos.
+// ---------------------------------------------------------------
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) return;
+
+  const msg = event.data;
+  if (!msg || msg.source !== "f1-dashboard" || msg.type !== "update-filters") return;
+  if (!Array.isArray(msg.driverPair)) return;
+
+  if (msg.driverPair.length < 2) {
+    setStatus(`Seleccioná ${2 - msg.driverPair.length} piloto(s) más en el menú.`);
+    clearChart();
+    currentPair = null;
+    return;
+  }
+
+  const [a, b] = msg.driverPair;
+  if (currentPair && currentPair[0] === a && currentPair[1] === b) return; // sin cambios reales
+
+  loadAndRender([a, b]);
+});
+
+// ---------------------------------------------------------------
+// Integración con el frontend base: race_id/api_base llegan por query
+// param al crear el iframe; driverPair llega después, por postMessage,
+// una vez que el usuario elige 2 pilotos en el menú.
+// ---------------------------------------------------------------
+(function initFromQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  const raceIdParam = params.get("race_id");
+  const apiBaseParam = params.get("api_base");
+
+  if (apiBaseParam) apiBase = apiBaseParam;
+  if (raceIdParam) raceId = raceIdParam;
+
+  setStatus("Seleccioná 2 pilotos en el menú (☰) para comparar.");
+})();
+</script>
+</body>
+</html>

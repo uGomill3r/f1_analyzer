@@ -34,6 +34,12 @@ columna que sí conserva el tiempo absoluto de la sesión, comparable con
 `SessionTime`. Usar `Time` acá hacía que la ventana [lap_start, lap_end]
 nunca coincidiera con ninguna muestra de la curva -> mask vacío -> traffic_pct
 siempre None/0, sin ninguna excepción de por medio.
+
+Las curvas (distancia, tiempo) que arma build_distance_time_curve() también
+se reutilizan, vía compute_traffic_by_driver(..., return_curves=True), para
+persistir DriverTelemetryCurve en load_fastf1.py y así poder calcular en
+tiempo de consulta el gap real entre dos pilotos arbitrarios (ver
+analytics/modules/pace_gap_comparison.py) sin volver a tocar FastF1.
 """
 
 import logging
@@ -187,7 +193,7 @@ def lap_traffic_pct(lap_start, lap_end, sample_times, gaps):
     return float(np.mean(in_traffic) * 100)
 
 
-def compute_traffic_by_driver(session):
+def compute_traffic_by_driver(session, return_curves=False):
     """
     Calcula, para cada piloto y cada una de sus vueltas, el % de tiempo en
     tráfico y el gap promedio al auto de adelante.
@@ -198,6 +204,12 @@ def compute_traffic_by_driver(session):
     Vueltas sin telemetría suficiente (o sin auto de referencia) quedan
     ausentes del dict interno del piloto; el caller decide qué hacer
     (típicamente, dejar traffic_pct/gap_to_front en None para esa vuelta).
+
+    Si return_curves=True, devuelve además un segundo dict
+    { driver_code: (distance_arr, time_arr) } con las curvas completas
+    distancia-tiempo por piloto (las mismas que arma build_distance_time_curve),
+    para que el caller (load_fastf1.py) las persista en DriverTelemetryCurve
+    sin tener que recalcularlas.
     """
     driver_codes = session.laps["Driver"].unique()
 
@@ -247,4 +259,7 @@ def compute_traffic_by_driver(session):
         "traffic: cálculo de tráfico completo. %s vuelta(s) con traffic_pct calculado.",
         total_laps_with_traffic,
     )
+
+    if return_curves:
+        return result, curves
     return result

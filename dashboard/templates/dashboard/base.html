@@ -123,19 +123,35 @@
     font-size: 13px;
     color: #f5f1e8;
   }
-  #pace-driver-filter {
+
+  /* --- Controles propios del módulo "Comparación de ritmo (2 pilotos)" --- */
+  #gap-comparison-controls {
+    display: none;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid #3d3d3d;
+  }
+  #gap-status {
+    font-size: 12px;
+    color: #bdbdbd;
+    margin-top: 6px;
+  }
+
+  /* --- Selector de pilotos por chips: reutilizado por pace_by_stint y
+       pace_gap_comparison, cada uno en su propio contenedor. --- */
+  .chip-filter {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
   }
-  #pace-driver-filter .chip-actions {
+  .chip-filter .chip-actions {
     display: flex;
     gap: 6px;
     margin-right: 6px;
   }
-  #pace-driver-filter .chip-actions button {
+  .chip-filter .chip-actions button {
     font-size: 12px;
     padding: 4px 9px;
     border: 1px solid #555;
@@ -144,7 +160,7 @@
     border-radius: 12px;
     cursor: pointer;
   }
-  #pace-driver-filter .chip {
+  .chip-filter .chip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -157,14 +173,18 @@
     cursor: pointer;
     user-select: none;
   }
-  #pace-driver-filter .chip:has(input:not(:checked)) {
+  .chip-filter .chip:has(input:not(:checked)) {
     opacity: 0.45;
   }
-  #pace-driver-filter .chip input {
+  .chip-filter .chip:has(input:disabled:not(:checked)) {
+    opacity: 0.25;
+    cursor: not-allowed;
+  }
+  .chip-filter .chip input {
     margin: 0;
     cursor: pointer;
   }
-  #pace-driver-filter .chip .dot {
+  .chip-filter .chip .dot {
     width: 9px;
     height: 9px;
     border-radius: 50%;
@@ -227,8 +247,17 @@
     <div class="row">
       <label class="checkbox-label"><input type="checkbox" id="pace-group-by-team"> Agrupar compañeros de equipo</label>
     </div>
-    <div id="pace-driver-filter"></div>
+    <div id="pace-driver-filter" class="chip-filter"></div>
     <div id="pace-status"></div>
+  </div>
+
+  <!-- Controles exclusivos del módulo "Comparación de ritmo (2 pilotos)":
+       chips reutilizando el mismo patrón visual que pace_by_stint, pero
+       limitados a exactamente 2 seleccionados. El orden de selección define
+       piloto A (referencia de distancia) / piloto B. -->
+  <div id="gap-comparison-controls">
+    <div id="gap-driver-filter" class="chip-filter"></div>
+    <div id="gap-status"></div>
   </div>
 </div>
 
@@ -249,8 +278,9 @@
   const STATIC_URL = JSON.parse(document.getElementById("static-url-data").textContent);
   const DEFAULT_MODULE_PAGE = JSON.parse(document.getElementById("default-module-page-data").textContent);
 
-  // Nombre interno del único módulo con controles propios en el menú.
+  // Nombres internos de los módulos con controles propios en el menú.
   const PACE_BY_STINT_MODULE = "pace_by_stint";
+  const GAP_COMPARISON_MODULE = "pace_gap_comparison";
 
   const menuToggle = document.getElementById("menu-toggle");
   const menuPanel = document.getElementById("menu-panel");
@@ -270,6 +300,53 @@
   const groupByTeamCheckbox = document.getElementById("pace-group-by-team");
   const driverFilterEl = document.getElementById("pace-driver-filter");
   const paceStatusEl = document.getElementById("pace-status");
+
+  // --- Controles del módulo "Comparación de ritmo (2 pilotos)" ---
+  const gapControls = document.getElementById("gap-comparison-controls");
+  const gapDriverFilterEl = document.getElementById("gap-driver-filter");
+  const gapStatusEl = document.getElementById("gap-status");
+  let gapSelectedOrder = []; // hasta 2 códigos, en orden de selección (A, B)
+
+  // ---------------------------------------------------------------
+  // Paleta de colores por equipo, duplicada intencionalmente de
+  // pace_by_stint.html: cada módulo vive en un archivo estático
+  // independiente cargado en su propio iframe, sin un JS compartido entre
+  // el frontend base (este archivo) y los módulos.
+  // ---------------------------------------------------------------
+  const TEAM_COLORS = {
+    "Red Bull Racing": "#3671C6",
+    "Red Bull": "#3671C6",
+    "Ferrari": "#E8002D",
+    "Mercedes": "#27F4D2",
+    "McLaren": "#FF8000",
+    "Aston Martin": "#229971",
+    "Alpine": "#00A1E8",
+    "Williams": "#64C4FF",
+    "RB": "#6692FF",
+    "Racing Bulls": "#6692FF",
+    "Kick Sauber": "#52E252",
+    "Sauber": "#52E252",
+    "Audi": "#9B0000",
+    "Haas": "#B6BABD",
+    "Cadillac": "#8B6F47",
+  };
+
+  // Fallback determinístico (sin depender de d3, que este archivo no carga):
+  // hashea el nombre del equipo a un matiz HSL estable.
+  function fallbackTeamColor(teamName) {
+    let h = 2166136261;
+    const str = teamName || "";
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    const hue = (h >>> 0) % 360;
+    return `hsl(${hue}, 65%, 55%)`;
+  }
+
+  function teamColor(teamName) {
+    return TEAM_COLORS[teamName] || fallbackTeamColor(teamName);
+  }
 
   function racesForYear(year) {
     return RACES.filter((r) => String(r.year) === String(year));
@@ -318,13 +395,17 @@
     fillSelect(moduleSelect, MODULES.map((m) => ({ value: m.name, label: m.label })));
   }
 
-  function findRaceId() {
-    const match = RACES.find(
+  function findRace() {
+    return RACES.find(
       (r) =>
         String(r.year) === String(yearSelect.value) &&
         String(r.round_number) === String(gpSelect.value) &&
         r.session_type === sessionSelect.value
     );
+  }
+
+  function findRaceId() {
+    const match = findRace();
     return match ? match.id : null;
   }
 
@@ -436,7 +517,93 @@
     el.addEventListener("change", sendFiltersToFrame);
   });
 
-  moduleSelect.addEventListener("change", updatePaceControlsVisibility);
+  // -----------------------------------------------------------------
+  // Controles del módulo "Comparación de ritmo (2 pilotos)": chips con
+  // tope de 2 seleccionados, armados directo desde el roster de RACES
+  // (no hace falta esperar a que el iframe reporte nada).
+  // -----------------------------------------------------------------
+
+  function isGapModuleSelected() {
+    return moduleSelect.value === GAP_COMPARISON_MODULE;
+  }
+
+  function updateGapControlsVisibility() {
+    gapControls.style.display = isGapModuleSelected() ? "block" : "none";
+  }
+
+  function updateGapChipsDisabledState() {
+    const atLimit = gapSelectedOrder.length >= 2;
+    gapDriverFilterEl.querySelectorAll(".chip input").forEach((cb) => {
+      if (!cb.checked) cb.disabled = atLimit;
+    });
+  }
+
+  function sendGapSelectionToFrame() {
+    if (!isGapModuleSelected() || !frame.contentWindow) return;
+
+    frame.contentWindow.postMessage({
+      source: "f1-dashboard",
+      type: "update-filters",
+      driverPair: gapSelectedOrder.slice(),
+    }, window.location.origin);
+
+    gapStatusEl.textContent = gapSelectedOrder.length < 2
+      ? `Elegí ${2 - gapSelectedOrder.length} piloto(s) más (el orden define piloto A / piloto B).`
+      : `Comparando ${gapSelectedOrder[0]} (A) vs ${gapSelectedOrder[1]} (B).`;
+  }
+
+  function renderGapDriverChips() {
+    const race = findRace();
+    const drivers = race && race.drivers ? race.drivers : [];
+
+    gapDriverFilterEl.innerHTML = "";
+    gapSelectedOrder = [];
+
+    if (drivers.length === 0) {
+      gapStatusEl.textContent = "No hay pilotos cargados para esa carrera.";
+      return;
+    }
+
+    drivers.forEach(({ code, team }) => {
+      const chip = document.createElement("label");
+      chip.className = "chip";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = code;
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          if (gapSelectedOrder.length >= 2) {
+            // Límite de 2: no debería poder tildarse (queda disabled), pero
+            // por las dudas se ignora el cambio igual.
+            checkbox.checked = false;
+            return;
+          }
+          gapSelectedOrder.push(code);
+        } else {
+          gapSelectedOrder = gapSelectedOrder.filter((c) => c !== code);
+        }
+        updateGapChipsDisabledState();
+        sendGapSelectionToFrame();
+      });
+
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = teamColor(team);
+
+      chip.appendChild(checkbox);
+      chip.appendChild(dot);
+      chip.appendChild(document.createTextNode(code));
+      gapDriverFilterEl.appendChild(chip);
+    });
+
+    gapStatusEl.textContent = "Elegí 2 pilotos para comparar (el orden define piloto A / piloto B).";
+  }
+
+  moduleSelect.addEventListener("change", () => {
+    updatePaceControlsVisibility();
+    updateGapControlsVisibility();
+  });
 
   // -----------------------------------------------------------------
 
@@ -466,6 +633,13 @@
     paceStatusEl.textContent = "";
     driverFilterEl.innerHTML = "";
 
+    gapStatusEl.textContent = "";
+    gapDriverFilterEl.innerHTML = "";
+    gapSelectedOrder = [];
+    if (isGapModuleSelected()) {
+      renderGapDriverChips();
+    }
+
     frame.src = src;
     frame.style.display = "block";
     emptyState.style.display = "none";
@@ -474,6 +648,7 @@
   // --- Inicialización ---
   populateModules();
   updatePaceControlsVisibility();
+  updateGapControlsVisibility();
   if (RACES.length === 0) {
     statusEl.textContent = "Todavía no hay carreras cargadas (usá el comando load_fastf1).";
   } else {

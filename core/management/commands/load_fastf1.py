@@ -4,7 +4,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from core.models import Driver, Lap, Race, RaceResult, Stint, Team
+from core.models import Driver, DriverTelemetryCurve, Lap, Race, RaceResult, Stint, Team
 from core.services.traffic import compute_traffic_by_driver
 
 logger = logging.getLogger(__name__)
@@ -38,10 +38,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         try:
             import fastf1
+            import numpy as np
             import pandas as pd
         except ImportError as exc:
             raise CommandError(
-                "fastf1 y pandas son requeridos para este comando. "
+                "fastf1, pandas y numpy son requeridos para este comando. "
                 "Instala las dependencias con: pip install -r requirements.txt"
             ) from exc
 
@@ -88,16 +89,23 @@ class Command(BaseCommand):
         # base) y puede tardar bastante (arma curvas distancia-tiempo por
         # piloto con toda su telemetría de carrera). Si falla, se sigue
         # cargando el resto de los datos sin tráfico (no es bloqueante).
+        #
+        # return_curves=True: además del % de tráfico, recuperamos las
+        # curvas distancia-tiempo completas de cada piloto, para: (a)
+        # derivar session_time_end/cum_distance_end de cada Lap, y (b)
+        # persistirlas en DriverTelemetryCurve (ver analytics/modules/
+        # pace_gap_comparison.py, que las usa para calcular el gap real
+        # entre dos pilotos arbitrarios sin volver a tocar FastF1).
         # -----------------------------
         self.stdout.write("Calculando % de vuelta en tráfico (telemetría)...")
         try:
-            traffic_by_driver = compute_traffic_by_driver(session)
+            traffic_by_driver, driver_curves = compute_traffic_by_driver(session, return_curves=True)
         except Exception:
             logger.exception(
                 "load_fastf1: fallo calculando tráfico por telemetría; "
-                "se continúa sin traffic_pct/gap_to_front."
+                "se continúa sin traffic_pct/gap_to_front ni curvas de telemetría."
             )
-            traffic_by_driver = {}
+            traffic_by_driver, driver_curves = {}, {}
 
         # Resumen visible por stdout (no solo por logging: si el logger de
         # core.services.traffic no tiene handler configurado en settings.py,
@@ -114,6 +122,7 @@ class Command(BaseCommand):
 
         created_laps = 0
         updated_laps = 0
+        curves_saved = 0
 
         with transaction.atomic():
             # Idempotente: si la ronda + tipo de sesión ya existe, se actualiza
@@ -150,6 +159,9 @@ class Command(BaseCommand):
                     driver.save(update_fields=["team"])
 
                 driver_traffic = traffic_by_driver.get(driver_code, {})
+                own_distance_curve, own_time_curve = driver_curves.get(
+                    driver_code, (np.array([]), np.array([]))
+                )
 
                 for _, lap in driver_laps.iterrows():
                     stint_number = int(lap["Stint"]) if not pd.isna(lap["Stint"]) else 0
@@ -188,6 +200,27 @@ class Command(BaseCommand):
                         traffic_pct = traffic_info["traffic_pct"]
                         gap_to_front = traffic_info["mean_gap"]
 
+                    # Tiempo absoluto de sesión al completar la vuelta (para
+                    # comparación de ritmo entre 2 pilotos, ver
+                    # analytics/modules/pace_gap_comparison.py). Sale directo
+                    # de FastF1, no requiere telemetría.
+                    session_time_end = (
+                        lap["Time"].total_seconds() if pd.notna(lap.get("Time")) else None
+                    )
+
+                    # Distancia acumulada del piloto en ese instante: se
+                    # interpola sobre su PROPIA curva distancia-tiempo
+                    # (tiempo -> distancia). None si no hay telemetría
+                    # suficiente para este piloto.
+                    cum_distance_end = None
+                    if session_time_end is not None and own_time_curve.size:
+                        interpolated = np.interp(
+                            session_time_end, own_time_curve, own_distance_curve,
+                            left=np.nan, right=np.nan,
+                        )
+                        if not np.isnan(interpolated):
+                            cum_distance_end = float(interpolated)
+
                     _, created = Lap.objects.update_or_create(
                         driver=driver,
                         race=race,
@@ -200,12 +233,35 @@ class Command(BaseCommand):
                             "track_status": track_status,
                             "traffic_pct": traffic_pct,
                             "gap_to_front": gap_to_front,
+                            "session_time_end": session_time_end,
+                            "cum_distance_end": cum_distance_end,
                         },
                     )
                     if created:
                         created_laps += 1
                     else:
                         updated_laps += 1
+
+                # Persistimos la curva completa del piloto una sola vez (no
+                # por vuelta): analytics/modules/pace_gap_comparison.py la usa
+                # para calcular el gap real contra cualquier otro piloto.
+                if own_distance_curve.size:
+                    DriverTelemetryCurve.objects.update_or_create(
+                        driver=driver,
+                        race=race,
+                        defaults={
+                            "distance": own_distance_curve.tolist(),
+                            "session_time": own_time_curve.tolist(),
+                        },
+                    )
+                    curves_saved += 1
+                else:
+                    logger.warning(
+                        "load_fastf1: sin curva distancia-tiempo para %s; "
+                        "pace_gap_comparison no podrá calcular el gap real "
+                        "contra este piloto (quedará sin DriverTelemetryCurve).",
+                        driver_code,
+                    )
 
             # -----------------------------
             # Resultado final (posición de clasificación): se usa para
@@ -257,9 +313,10 @@ class Command(BaseCommand):
                 )
 
         logger.info(
-            "load_fastf1: finalizado race_id=%s creadas=%s actualizadas=%s",
-            race.id, created_laps, updated_laps,
+            "load_fastf1: finalizado race_id=%s creadas=%s actualizadas=%s curvas_guardadas=%s",
+            race.id, created_laps, updated_laps, curves_saved,
         )
         self.stdout.write(self.style.SUCCESS(
-            f"Listo. Vueltas creadas: {created_laps}, actualizadas: {updated_laps}."
+            f"Listo. Vueltas creadas: {created_laps}, actualizadas: {updated_laps}, "
+            f"curvas de telemetría guardadas: {curves_saved}."
         ))
