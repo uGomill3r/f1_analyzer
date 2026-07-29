@@ -25,6 +25,15 @@ Nota: la distancia se acumula vuelta a vuelta usando el último valor de
 distancia real de pit lane, corte de chicanas, etc. puede variar levemente),
 suficiente para clasificar tráfico con umbral de 2s, pero no para telemetría
 de precisión milimétrica.
+
+IMPORTANTE (bug traffic_pct=0 corregido): `lap.get_car_data()` devuelve la
+telemetría de UNA vuelta puntual, y su columna `Time` está re-basada a 0
+para esa vuelta (no es continua entre vueltas de un mismo piloto). La
+columna que sí conserva el tiempo absoluto de la sesión, comparable con
+`LapStartTime` / `Time` del DataFrame de vueltas (session.laps), es
+`SessionTime`. Usar `Time` acá hacía que la ventana [lap_start, lap_end]
+nunca coincidiera con ninguna muestra de la curva -> mask vacío -> traffic_pct
+siempre None/0, sin ninguna excepción de por medio.
 """
 
 import logging
@@ -62,6 +71,7 @@ def build_distance_time_curve(session, driver_code):
     distances = []
     times = []
     cumulative_offset = 0.0
+    laps_without_session_time = 0
 
     # IMPORTANTE: se itera con .iloc[] y no con .iterrows(). .iterrows() de
     # pandas siempre devuelve cada fila como un Series genérico, aunque el
@@ -83,14 +93,35 @@ def build_distance_time_curve(session, driver_code):
         if car_data.empty:
             continue
 
+        if "SessionTime" not in car_data.columns:
+            # No debería pasar en un uso normal de FastF1, pero si pasa no
+            # hay forma de ubicar esta vuelta en el eje de tiempo absoluto
+            # de la sesión: se descarta (y se deja constancia en el resumen).
+            laps_without_session_time += 1
+            logger.warning(
+                "traffic: car_data sin columna SessionTime para %s vuelta %s; se omite.",
+                driver_code, lap.get("LapNumber"),
+            )
+            continue
+
         lap_distance = car_data["Distance"].to_numpy() + cumulative_offset
-        lap_time = car_data["Time"].dt.total_seconds().to_numpy()
+        # Se usa SessionTime (tiempo absoluto de sesión) y NO Time (que
+        # get_car_data() re-basa a 0 en cada vuelta individual) para que la
+        # curva sea comparable contra LapStartTime/Time de session.laps.
+        lap_time = car_data["SessionTime"].dt.total_seconds().to_numpy()
 
         distances.append(lap_distance)
         times.append(lap_time)
         cumulative_offset += float(car_data["Distance"].iloc[-1])
 
+    if laps_without_session_time:
+        logger.warning(
+            "traffic: %s vuelta(s) de %s descartadas por falta de SessionTime.",
+            laps_without_session_time, driver_code,
+        )
+
     if not distances:
+        logger.debug("traffic: sin telemetría utilizable para %s; curva vacía.", driver_code)
         return np.array([]), np.array([])
 
     distance_arr = np.concatenate(distances)
@@ -173,6 +204,13 @@ def compute_traffic_by_driver(session):
     logger.info("traffic: construyendo curvas distancia-tiempo para %s piloto(s)...", len(driver_codes))
     curves = {code: build_distance_time_curve(session, code) for code in driver_codes}
 
+    empty_curves = [code for code, (dist, _) in curves.items() if dist.size == 0]
+    if empty_curves:
+        logger.warning(
+            "traffic: %s piloto(s) sin curva distancia-tiempo utilizable: %s",
+            len(empty_curves), empty_curves,
+        )
+
     result = {}
 
     for code in driver_codes:
@@ -204,5 +242,9 @@ def compute_traffic_by_driver(session):
 
         result[code] = per_lap
 
-    logger.info("traffic: cálculo de tráfico completo.")
+    total_laps_with_traffic = sum(len(v) for v in result.values())
+    logger.info(
+        "traffic: cálculo de tráfico completo. %s vuelta(s) con traffic_pct calculado.",
+        total_laps_with_traffic,
+    )
     return result
