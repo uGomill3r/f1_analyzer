@@ -4,7 +4,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from core.models import Driver, Lap, Race, Stint, Team
+from core.models import Driver, Lap, Race, RaceResult, Stint, Team
 from core.services.traffic import compute_traffic_by_driver
 
 logger = logging.getLogger(__name__)
@@ -206,6 +206,55 @@ class Command(BaseCommand):
                         created_laps += 1
                     else:
                         updated_laps += 1
+
+            # -----------------------------
+            # Resultado final (posición de clasificación): se usa para
+            # ordenar charts (ej: heatmap de laps_in_traffic) según la
+            # llegada real en vez de aproximarla por cantidad de vueltas.
+            # Se guarda a partir de session.results (no de laps_df), así
+            # que también cubre pilotos sin vueltas registradas (ej: DNS).
+            # -----------------------------
+            results_df = session.results
+            results_saved = 0
+
+            if results_df is None or results_df.empty:
+                logger.warning(
+                    "load_fastf1: session.results vacío para race_id=%s; "
+                    "no se guardó RaceResult (el orden por vueltas quedará como fallback).",
+                    race.id,
+                )
+            else:
+                for _, row in results_df.iterrows():
+                    driver_code = row.get("Abbreviation")
+                    if not driver_code:
+                        continue
+
+                    team_name = row.get("TeamName") or "Unknown"
+                    team, _ = Team.objects.get_or_create(name=team_name)
+                    driver, _ = Driver.objects.get_or_create(
+                        code=driver_code, defaults={"team": team}
+                    )
+
+                    position_raw = row.get("Position")
+                    position = int(position_raw) if pd.notna(position_raw) else None
+                    classified_position_raw = str(row.get("ClassifiedPosition") or "")
+                    status = str(row.get("Status") or "")
+
+                    RaceResult.objects.update_or_create(
+                        driver=driver,
+                        race=race,
+                        defaults={
+                            "position": position,
+                            "classified_position_raw": classified_position_raw,
+                            "status": status,
+                        },
+                    )
+                    results_saved += 1
+
+                logger.info(
+                    "load_fastf1: race_id=%s -> %s resultado(s) de clasificación guardados.",
+                    race.id, results_saved,
+                )
 
         logger.info(
             "load_fastf1: finalizado race_id=%s creadas=%s actualizadas=%s",

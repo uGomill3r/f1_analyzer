@@ -3,7 +3,7 @@
 import logging
 
 from analytics.modules.base import BaseAnalysisModule
-from core.models import Lap
+from core.models import Lap, RaceResult
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,12 @@ class LapsInTraffic(BaseAnalysisModule):
     que el frontend pueda señalizarlas en vez de dejarlas como un hueco sin
     explicación. Solo quedan afuera las vueltas sin traffic_pct NI motivo de
     track_status (típicamente, telemetría insuficiente para calcular el gap).
+
+    Cada piloto incluye final_position (posición final de carrera, ver
+    RaceResult / load_fastf1.py), usada para ordenar el resultado según la
+    clasificación real. Queda en None para sesiones cargadas antes de que
+    RaceResult existiera (hace falta reimportar con load_fastf1); en ese
+    caso el frontend recurre a su propio fallback de ordenamiento.
     """
 
     name = "laps_in_traffic"
@@ -44,6 +50,11 @@ class LapsInTraffic(BaseAnalysisModule):
     # -----------------------------
 
     def transform(self, qs, filters):
+        race_id = filters.get("race_id")
+        positions_by_driver = dict(
+            RaceResult.objects.filter(race_id=race_id).values_list("driver__code", "position")
+        )
+
         by_driver = {}
         track_status_laps = 0
         skipped_laps = 0
@@ -75,12 +86,28 @@ class LapsInTraffic(BaseAnalysisModule):
             if track_status_label is not None:
                 track_status_laps += 1
 
+        for driver_code, entry in by_driver.items():
+            entry["final_position"] = positions_by_driver.get(driver_code)
+
         result = list(by_driver.values())
+
+        # Orden por clasificación real (final_position ascendente); los
+        # pilotos sin RaceResult (sesión no reimportada aún) quedan al final,
+        # en el mismo orden relativo en que llegaron desde by_driver.
+        result.sort(key=lambda d: (d["final_position"] is None, d["final_position"] or 0))
+
+        drivers_without_position = sum(1 for d in result if d["final_position"] is None)
+        if drivers_without_position:
+            logger.warning(
+                "laps_in_traffic: race_id=%s -> %s piloto(s) sin final_position "
+                "(reimportá la sesión con load_fastf1 para tener orden de clasificación real).",
+                race_id, drivers_without_position,
+            )
 
         logger.info(
             "laps_in_traffic: race_id=%s -> %s piloto(s), %s vuelta(s) con track_status, "
             "%s vuelta(s) descartadas (sin traffic_pct ni track_status)",
-            filters.get("race_id"), len(result), track_status_laps, skipped_laps,
+            race_id, len(result), track_status_laps, skipped_laps,
         )
 
         return result

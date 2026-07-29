@@ -156,15 +156,24 @@ let apiBase = "http://127.0.0.1:8000";
 let raceId = null;
 
 // ---------------------------------------------------------------
-// Orden de pilotos: el backend (analytics/modules/laps_in_traffic.py) no
-// expone posición final de carrera, así que se usa como aproximación la
-// cantidad de vueltas con dato (traffic_pct o track_status) descendente —
-// quien completó más vueltas queda más arriba, como proxy de la
-// clasificación real. No es exactamente el orden de llegada del gráfico
-// de referencia.
+// Orden de pilotos: por final_position (posición final de carrera, ver
+// RaceResult / load_fastf1.py) ascendente, que es el orden de llegada real.
+// El backend ya lo devuelve ordenado así, pero se ordena de nuevo acá por
+// si algún día este módulo filtra/reordena en el cliente.
+//
+// Fallback: si final_position viene en null (sesión cargada antes de que
+// RaceResult existiera; hace falta reimportar con load_fastf1) se aproxima
+// por cantidad de vueltas con dato, descendente.
 // ---------------------------------------------------------------
 function sortDrivers(drivers) {
-  return [...drivers].sort((a, b) => b.laps.length - a.laps.length);
+  return [...drivers].sort((a, b) => {
+    const posA = a.final_position;
+    const posB = b.final_position;
+    if (posA != null && posB != null) return posA - posB;
+    if (posA != null) return -1;
+    if (posB != null) return 1;
+    return b.laps.length - a.laps.length;
+  });
 }
 
 function drawLegend() {

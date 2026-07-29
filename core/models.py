@@ -73,6 +73,37 @@ class Race(models.Model):
         return f"{self.year} {self.round_code} - {self.gp_name} ({self.get_session_type_display()})"
 
 
+class RaceResult(models.Model):
+    """
+    Resultado final de un piloto en una sesión (Race o Sprint), tal como lo
+    reporta FastF1 (session.results). Se usa para ordenar charts según la
+    clasificación real (ej: heatmap de laps_in_traffic) en vez de aproximar
+    el orden por cantidad de vueltas completadas.
+
+    position queda None cuando FastF1 no reporta una posición numérica
+    (retirado, descalificado, no arrancó, etc.); en esos casos
+    classified_position_raw conserva el código tal cual vino de FastF1
+    (ej: "R", "D", "W", "E") y status describe el motivo (ej: "Retired").
+    """
+
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name="results")
+    race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="results")
+
+    position = models.PositiveSmallIntegerField(null=True, blank=True)
+    classified_position_raw = models.CharField(max_length=5, blank=True, default="")
+    status = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["driver", "race"], name="unique_result_per_driver_race"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.driver.code} - {self.race} - P{self.position or self.classified_position_raw or '?'}"
+
+
 class Stint(models.Model):
     driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name="stints")
     race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="stints")
