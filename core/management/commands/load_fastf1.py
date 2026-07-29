@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from core.models import Driver, Lap, Race, Stint, Team
+from core.services.traffic import compute_traffic_by_driver
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,23 @@ class Command(BaseCommand):
         if laps_df is None or laps_df.empty:
             raise CommandError("La sesión no tiene datos de vueltas disponibles.")
 
+        # -----------------------------
+        # Tráfico por vuelta (telemetría): se calcula ANTES de la transacción
+        # porque es una operación de solo lectura sobre FastF1 (no toca la
+        # base) y puede tardar bastante (arma curvas distancia-tiempo por
+        # piloto con toda su telemetría de carrera). Si falla, se sigue
+        # cargando el resto de los datos sin tráfico (no es bloqueante).
+        # -----------------------------
+        self.stdout.write("Calculando % de vuelta en tráfico (telemetría)...")
+        try:
+            traffic_by_driver = compute_traffic_by_driver(session)
+        except Exception:
+            logger.exception(
+                "load_fastf1: fallo calculando tráfico por telemetría; "
+                "se continúa sin traffic_pct/gap_to_front."
+            )
+            traffic_by_driver = {}
+
         created_laps = 0
         updated_laps = 0
 
@@ -118,6 +136,8 @@ class Command(BaseCommand):
                     driver.team = team
                     driver.save(update_fields=["team"])
 
+                driver_traffic = traffic_by_driver.get(driver_code, {})
+
                 for _, lap in driver_laps.iterrows():
                     stint_number = int(lap["Stint"]) if not pd.isna(lap["Stint"]) else 0
                     stint, _ = Stint.objects.get_or_create(
@@ -139,16 +159,34 @@ class Command(BaseCommand):
                         str(track_status_raw) if pd.notna(track_status_raw) else ""
                     )
 
+                    # El chart "Laps in traffic" excluye explícitamente las
+                    # vueltas bajo SC/VSC/bandera: aunque se haya podido
+                    # calcular el % de tráfico, se descarta acá.
+                    is_non_green = bool(track_status) and any(
+                        code in Lap.NON_GREEN_TRACK_STATUS_CODES for code in track_status
+                    )
+
+                    lap_number = int(lap["LapNumber"])
+                    traffic_info = driver_traffic.get(lap_number)
+
+                    traffic_pct = None
+                    gap_to_front = None
+                    if traffic_info and not is_non_green:
+                        traffic_pct = traffic_info["traffic_pct"]
+                        gap_to_front = traffic_info["mean_gap"]
+
                     _, created = Lap.objects.update_or_create(
                         driver=driver,
                         race=race,
-                        lap_number=int(lap["LapNumber"]),
+                        lap_number=lap_number,
                         defaults={
                             "stint": stint,
                             "lap_time": lap_time,
                             "compound": lap["Compound"] or "",
                             "is_pit": is_pit,
                             "track_status": track_status,
+                            "traffic_pct": traffic_pct,
+                            "gap_to_front": gap_to_front,
                         },
                     )
                     if created:
