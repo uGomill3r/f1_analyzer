@@ -388,11 +388,25 @@ window.addEventListener("message", (event) => {
   const msg = event.data;
   if (!msg || msg.source !== "f1-dashboard" || msg.type !== "update-filters") return;
 
+  // Solo includeReasons afecta los datos calculados (medias, outliers, etc.).
+  // selectedDrivers y groupByTeam son puramente de presentación: si los tratamos
+  // igual que includeReasons, cada cambio dispara rebuildAndDraw() ->
+  // notifyParentDrivers() -> el padre recrea los chips (reseteando la selección
+  // a "todos tildados") -> vuelve a mandar update-filters -> loop infinito, y
+  // en la práctica el clic en un chip parece no tener efecto.
+  const reasonsChanged =
+    msg.includeReasons &&
+    JSON.stringify(msg.includeReasons) !== JSON.stringify(filterState.includeReasons);
+
   if (msg.includeReasons) filterState.includeReasons = msg.includeReasons;
   if (typeof msg.groupByTeam === "boolean") filterState.groupByTeam = msg.groupByTeam;
   if (Array.isArray(msg.selectedDrivers)) filterState.selectedDrivers = msg.selectedDrivers;
 
-  rebuildAndDraw();
+  if (reasonsChanged) {
+    rebuildAndDraw(); // recalcula allDrivers y renotifica al padre (drivers + status)
+  } else {
+    updateChart(); // solo cambió selección de pilotos o agrupamiento: no hace falta renotificar
+  }
 });
 
 function drawChart(drivers) {
