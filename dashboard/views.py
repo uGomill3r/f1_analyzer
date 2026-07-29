@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # propia, se usa DEFAULT_MODULE_PAGE como placeholder.
 MODULE_PAGES = {
     "pace_by_stint": "dashboard/modules/pace_by_stint.html",
+    "laps_in_traffic": "dashboard/modules/laps_in_traffic.html",
 }
 DEFAULT_MODULE_PAGE = "dashboard/modules/blank.html"
 
@@ -21,6 +22,7 @@ MODULE_LABELS = {
     "pace_by_stint": "Ritmo por stint (boxplot)",
     "tyre_degradation_advanced": "Degradación de neumáticos (avanzada)",
     "pace_adjusted": "Pace ajustado",
+    "laps_in_traffic": "Vueltas en tráfico (heatmap)",
 }
 
 
