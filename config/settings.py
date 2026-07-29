@@ -127,3 +127,53 @@ CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localho
 
 # FastF1 cache local (ignorado en git, ver .gitignore)
 FASTF1_CACHE_DIR = env("FASTF1_CACHE_DIR", default=str(BASE_DIR / "cache"))
+
+
+# Logging
+# Sin esta config, cualquier logging.getLogger(__name__) de nuestro código
+# (core, analytics, dashboard) sube por la jerarquía hasta el logger raíz,
+# que por defecto no tiene ningún handler -> los mensajes se descartan en
+# silencio. Los únicos logs que se veían antes eran los de FastF1, que
+# configura su propio handler de forma interna, independiente de esto.
+#
+# Nota: FastF1 nombra sus propios loggers con nombres cortos como "core" o
+# "req" (no "fastf1.core"). Nuestra app Django "core" también termina
+# propagando a través de un logger llamado "core" (por jerarquía, ya que
+# "core.services.traffic" es hijo de "core"). No es un problema: en el peor
+# caso, los logs internos de FastF1 también pasan por nuestro handler/nivel,
+# lo cual es inofensivo.
+DJANGO_LOG_LEVEL = env("DJANGO_LOG_LEVEL", default="DEBUG" if DEBUG else "INFO")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{asctime} {levelname:<8} {name} - {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    # Root logger: captura todo lo que no tenga un logger más específico
+    # configurado explícitamente (core, core.services.traffic, analytics,
+    # dashboard, etc. propagan hasta acá).
+    "root": {
+        "handlers": ["console"],
+        "level": DJANGO_LOG_LEVEL,
+    },
+    "loggers": {
+        # Se define aparte con propagate=False para que los logs de Django
+        # no se dupliquen (una vez por su propio manejo, otra vez por el
+        # root logger de arriba).
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
