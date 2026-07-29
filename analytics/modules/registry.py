@@ -3,6 +3,7 @@ from analytics.modules.pace_by_stint import PaceByStint
 from analytics.modules.pace_gap_comparison import PaceGapComparison
 from analytics.modules.tyre_degradation_advanced import TyreDegradationAdvanced
 from analytics.modules.laps_in_traffic import LapsInTraffic
+from analytics.modules.lap_times_traffic import LapTimesTraffic
 
 MODULES = {
     PaceByStint.name: PaceByStint(),
@@ -10,6 +11,7 @@ MODULES = {
     PaceAdjusted.name: PaceAdjusted(),
     LapsInTraffic.name: LapsInTraffic(),
     PaceGapComparison.name: PaceGapComparison(),
+    LapTimesTraffic.name: LapTimesTraffic(),
 }
 
 

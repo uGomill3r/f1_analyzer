@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Lap Times + Traffic</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    --bg: #f2f2f0;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+    --track-status: #f2c744;
+    --pit: #8ecae6;
+    --no-data: #e3e1d6;
+  }
+  body {
+    background: var(--bg);
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: var(--ink);
+    margin: 0;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 4px 0;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  .axis text {
+    fill: var(--muted);
+    font-size: 12px;
+  }
+  .axis path, .axis line {
+    stroke: #cfcabc;
+  }
+  .driver-label {
+    font-size: 13px;
+    font-weight: 700;
+    text-anchor: middle;
+  }
+  .cell-time {
+    font-size: 10px;
+    font-family: "Consolas", "Courier New", monospace;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+  }
+  .cell-badge {
+    font-size: 8px;
+    font-weight: 700;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+  }
+  #status {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  #legend {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+  #legend .item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #legend .swatch {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    border: 1px solid #999;
+  }
+  #legend-gradient {
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+  <h1>Lap times + traffic</h1>
+  <div class="subtitle">Tiempo de cada vuelta por piloto; color = condición de la vuelta</div>
+
+  <div id="status"></div>
+  <svg id="chart"></svg>
+
+  <div id="legend">
+    <span class="item">Aire limpio (0%) → tráfico (100%), quiebre en 33%:</span>
+    <svg id="legend-gradient" width="220" height="34"></svg>
+    <span class="item"><span class="swatch" style="background:var(--track-status)"></span>SC / VSC / bandera (Y, SC, VSC, R)</span>
+    <span class="item"><span class="swatch" style="background:var(--pit)"></span>Entrada/salida de pits (P)</span>
+    <span class="item"><span class="swatch" style="background:var(--no-data)"></span>Sin dato de tráfico</span>
+  </div>
+
+<script>
+// ---------------------------------------------------------------
+// Vista hermana de laps_in_traffic.html, misma fuente de datos (tráfico por
+// telemetría, ver core/services/traffic.py) pero con foco en el TIEMPO de
+// cada vuelta en vez del % de tráfico, y ejes invertidos: pilotos en X,
+// número de vuelta en Y. Igual que laps_in_traffic, se embebe en un
+// <iframe> del frontend base sin controles propios (solo race_id/api_base
+// por query param).
+// ---------------------------------------------------------------
+
+const TEAM_COLORS = {
+  "Red Bull Racing": "#3671C6",
+  "Red Bull": "#3671C6",
+  "Ferrari": "#E8002D",
+  "Mercedes": "#27F4D2",
+  "McLaren": "#FF8000",
+  "Aston Martin": "#229971",
+  "Alpine": "#00A1E8",
+  "Williams": "#64C4FF",
+  "RB": "#6692FF",
+  "Racing Bulls": "#6692FF",
+  "Kick Sauber": "#52E252",
+  "Sauber": "#52E252",
+  "Audi": "#9B0000",
+  "Haas": "#B6BABD",
+  "Cadillac": "#8B6F47",
+};
+const fallbackColorScale = d3.scaleOrdinal(d3.schemeTableau10);
+
+function teamColor(teamName) {
+  return TEAM_COLORS[teamName] || fallbackColorScale(teamName);
+}
+
+// Colores fijos por categoría (ver leyenda).
+const TRACK_STATUS_COLOR = "#f2c744";
+const PIT_COLOR = "#8ecae6";
+const NO_DATA_COLOR = "#e3e1d6";
+
+// Umbral "en tráfico" (Lap.IN_TRAFFIC_THRESHOLD_PCT en core/models.py): a
+// partir de acá el degradado pasa de verde a rojo.
+const TRAFFIC_THRESHOLD_PCT = 33;
+const GREEN = "#1b7a3d";   // 0% tráfico (aire limpio total)
+const NEUTRAL = "#f2ede0"; // justo en el umbral (33%)
+const RED = "#b3261e";     // 100% tráfico
+
+// Escala por tramos: [0, 33] verde -> neutro, [33, 100] neutro -> rojo.
+const trafficColorScale = d3.scaleLinear()
+  .domain([0, TRAFFIC_THRESHOLD_PCT, 100])
+  .range([GREEN, NEUTRAL, RED])
+  .interpolate(d3.interpolateRgb);
+
+// Luminosidad relativa aproximada, para decidir si el texto va claro u oscuro.
+function textColorFor(bgColor) {
+  const c = d3.rgb(bgColor);
+  const luminance = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+  return luminance < 140 ? "#f5f1e8" : "#1c1c1c";
+}
+
+function formatLapTime(totalSeconds) {
+  if (totalSeconds == null) return "";
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = (totalSeconds - minutes * 60).toFixed(3);
+  return `${minutes}:${seconds.padStart(6, "0")}`;
+}
+
+// ---------------------------------------------------------------
+// Clasificación de una vuelta: decide color de fondo + badge chiquito.
+// Prioridad: pit > track_status > degradado de tráfico > sin dato.
+// (asunción: si una vuelta es de pit Y bajo SC/VSC, se prioriza pit porque
+// suele ser el dato más relevante para leerla; se puede invertir fácil).
+// ---------------------------------------------------------------
+function classifyLap(lap) {
+  if (lap.is_pit) {
+    return { fill: PIT_COLOR, badge: "P" };
+  }
+  if (lap.track_status_label) {
+    return { fill: TRACK_STATUS_COLOR, badge: lap.track_status_label };
+  }
+  if (lap.traffic_pct != null) {
+    return { fill: trafficColorScale(lap.traffic_pct), badge: null };
+  }
+  return { fill: NO_DATA_COLOR, badge: null };
+}
+
+let apiBase = "http://127.0.0.1:8000";
+let raceId = null;
+
+// Mismo criterio de orden que laps_in_traffic.html (posición final real).
+function sortDrivers(drivers) {
+  return [...drivers].sort((a, b) => {
+    const posA = a.final_position;
+    const posB = b.final_position;
+    if (posA != null && posB != null) return posA - posB;
+    if (posA != null) return -1;
+    if (posB != null) return 1;
+    return b.laps.length - a.laps.length;
+  });
+}
+
+function drawLegend() {
+  const svg = d3.select("#legend-gradient");
+  svg.selectAll("*").remove();
+
+  const gradientId = "traffic-gradient";
+  const defs = svg.append("defs");
+  const gradient = defs.append("linearGradient").attr("id", gradientId);
+
+  d3.range(0, 101, 5).forEach((pct) => {
+    gradient.append("stop")
+      .attr("offset", `${pct}%`)
+      .attr("stop-color", trafficColorScale(pct));
+  });
+
+  svg.append("rect")
+    .attr("x", 0).attr("y", 0)
+    .attr("width", 200).attr("height", 14)
+    .attr("fill", `url(#${gradientId})`)
+    .attr("stroke", "#999");
+
+  [0, TRAFFIC_THRESHOLD_PCT, 100].forEach((pct) => {
+    svg.append("text")
+      .attr("x", (pct / 100) * 200)
+      .attr("y", 28)
+      .attr("font-size", 10)
+      .attr("text-anchor", pct === 0 ? "start" : pct === 100 ? "end" : "middle")
+      .attr("fill", "#6b6b6b")
+      .text(`${pct}%`);
+  });
+}
+
+function drawChart(drivers, maxLap) {
+  const cellWidth = 64;
+  const cellHeight = 20;
+  const margin = { top: 24, right: 20, bottom: 10, left: 44 };
+
+  const width = drivers.length * cellWidth;
+  const height = maxLap * cellHeight;
+
+  const svg = d3.select("#chart")
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom);
+
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleBand().domain(drivers.map((d) => d.driver)).range([0, width]);
+  const y = d3.scaleLinear().domain([1, maxLap + 1]).range([0, height]);
+
+  // Eje de vueltas (izquierda), marcas cada 5 igual que laps_in_traffic.
+  const lapTicks = [1, ...d3.range(5, maxLap + 1, 5)];
+
+  g.append("g")
+    .attr("class", "axis")
+    .call(d3.axisLeft(y).tickValues(lapTicks).tickFormat(d3.format("d")).tickSize(0))
+    .call((sel) => sel.select(".domain").remove());
+
+  // --- Etiquetas de piloto (arriba), coloreadas por equipo ---
+  g.selectAll(".driver-label")
+    .data(drivers)
+    .enter()
+    .append("text")
+    .attr("class", "driver-label")
+    .attr("x", (d) => x(d.driver) + x.bandwidth() / 2)
+    .attr("y", -8)
+    .attr("fill", (d) => teamColor(d.team))
+    .text((d) => d.driver);
+
+  // --- Celdas: una por vuelta con lap_time disponible ---
+  drivers.forEach((driver) => {
+    const col = g.append("g");
+    const cx = x(driver.driver);
+
+    driver.laps.forEach((lap) => {
+      const cy = y(lap.lap);
+      const { fill, badge } = classifyLap(lap);
+      const textColor = textColorFor(fill);
+
+      col.append("rect")
+        .attr("x", cx)
+        .attr("y", cy)
+        .attr("width", x.bandwidth() - 1)
+        .attr("height", cellHeight - 1)
+        .attr("fill", fill);
+
+      col.append("text")
+        .attr("class", "cell-time")
+        .attr("x", cx + (x.bandwidth() - 1) / 2)
+        .attr("y", cy + (cellHeight - 1) / 2)
+        .attr("fill", textColor)
+        .text(formatLapTime(lap.time));
+
+      if (badge) {
+        col.append("text")
+          .attr("class", "cell-badge")
+          .attr("x", cx + x.bandwidth() - 8)
+          .attr("y", cy + 6)
+          .attr("fill", textColor)
+          .text(badge);
+      }
+    });
+  });
+}
+
+async function loadAndRender() {
+  const statusEl = document.getElementById("status");
+  statusEl.textContent = "Cargando datos...";
+
+  let payload;
+  try {
+    const res = await fetch(`${apiBase}/api/analysis?module=lap_times_traffic&race_id=${raceId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    payload = await res.json();
+  } catch (err) {
+    statusEl.textContent = `Error al cargar datos: ${err.message}. Verificá CORS_ALLOWED_ORIGINS en el backend.`;
+    return;
+  }
+
+  if (!payload.data || payload.data.length === 0) {
+    statusEl.textContent = "El módulo no devolvió vueltas (¿race_id correcto? ¿se corrió load_fastf1?).";
+    return;
+  }
+
+  statusEl.textContent = "";
+
+  const drivers = sortDrivers(payload.data);
+  drawLegend();
+  drawChart(drivers, payload.max_lap);
+}
+
+(function initFromQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  const raceIdParam = params.get("race_id");
+  const apiBaseParam = params.get("api_base");
+
+  if (apiBaseParam) {
+    apiBase = apiBaseParam;
+  }
+  if (raceIdParam) {
+    raceId = raceIdParam;
+    loadAndRender();
+  }
+})();
+</script>
+</body>
+</html>

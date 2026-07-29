@@ -15,16 +15,18 @@ MODULE_PAGES = {
     "pace_by_stint": "dashboard/modules/pace_by_stint.html",
     "laps_in_traffic": "dashboard/modules/laps_in_traffic.html",
     "pace_gap_comparison": "dashboard/modules/pace_gap_comparison.html",
+    "lap_times_traffic": "dashboard/modules/lap_times_traffic.html",
 }
 DEFAULT_MODULE_PAGE = "dashboard/modules/blank.html"
 
 # Etiquetas legibles para el selector de "Funcionalidad" del menú.
 MODULE_LABELS = {
-    "pace_by_stint": "Ritmo por stint (boxplot)",
-    "tyre_degradation_advanced": "Degradación de neumáticos (avanzada)",
+    "pace_by_stint": "Ritmo por stint",
+    "tyre_degradation_advanced": "Degradación de neumáticos",
     "pace_adjusted": "Pace ajustado",
-    "laps_in_traffic": "Vueltas en tráfico (heatmap)",
-    "pace_gap_comparison": "Comparación de ritmo (2 pilotos)",
+    "laps_in_traffic": "Vueltas en tráfico",
+    "pace_gap_comparison": "Comparación de ritmo",
+    "lap_times_traffic": "Tiempos de vuelta + tráfico",
 }
 
 
