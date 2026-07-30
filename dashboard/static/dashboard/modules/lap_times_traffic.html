@@ -29,10 +29,6 @@
     font-size: 14px;
     margin-bottom: 16px;
   }
-  .axis text {
-    fill: var(--muted);
-    font-size: 12px;
-  }
   .axis path, .axis line {
     stroke: #cfcabc;
   }
@@ -231,10 +227,17 @@ function drawLegend() {
   });
 }
 
+// Fuente/color de cada marca del eje de vueltas: los múltiplos de 10 se
+// destacan (grandes, negrita, tinta fuerte); el resto queda chico y muted,
+// para poder numerar TODAS las vueltas sin saturar el eje visualmente.
+function isMajorLapTick(lapNumber) {
+  return lapNumber % 10 === 0;
+}
+
 function drawChart(drivers, maxLap) {
   const cellWidth = 64;
-  const cellHeight = 20;
-  const margin = { top: 24, right: 20, bottom: 10, left: 44 };
+  const cellHeight = 26;
+  const margin = { top: 24, right: 20, bottom: 10, left: 46 };
 
   const width = drivers.length * cellWidth;
   const height = maxLap * cellHeight;
@@ -249,13 +252,19 @@ function drawChart(drivers, maxLap) {
   const x = d3.scaleBand().domain(drivers.map((d) => d.driver)).range([0, width]);
   const y = d3.scaleLinear().domain([1, maxLap + 1]).range([0, height]);
 
-  // Eje de vueltas (izquierda), marcas cada 5 igual que laps_in_traffic.
-  const lapTicks = [1, ...d3.range(5, maxLap + 1, 5)];
+  // Eje de vueltas (izquierda): TODAS las vueltas numeradas; los múltiplos
+  // de 10 se destacan en tamaño/negrita para que el eje siga siendo legible.
+  const allLapTicks = d3.range(1, maxLap + 1);
 
-  g.append("g")
+  const lapAxis = g.append("g")
     .attr("class", "axis")
-    .call(d3.axisLeft(y).tickValues(lapTicks).tickFormat(d3.format("d")).tickSize(0))
-    .call((sel) => sel.select(".domain").remove());
+    .call(d3.axisLeft(y).tickValues(allLapTicks).tickFormat(d3.format("d")).tickSize(0));
+
+  lapAxis.select(".domain").remove();
+  lapAxis.selectAll(".tick text")
+    .style("font-size", (d) => (isMajorLapTick(d) ? "12px" : "8px"))
+    .style("font-weight", (d) => (isMajorLapTick(d) ? "700" : "400"))
+    .style("fill", (d) => (isMajorLapTick(d) ? "var(--ink)" : "var(--muted)"));
 
   // --- Etiquetas de piloto (arriba), coloreadas por equipo ---
   g.selectAll(".driver-label")
@@ -269,6 +278,9 @@ function drawChart(drivers, maxLap) {
     .text((d) => d.driver);
 
   // --- Celdas: una por vuelta con lap_time disponible ---
+  // Si la vuelta tiene badge (pit/track status), se apila en dos líneas
+  // (badge arriba, tiempo abajo) para que no se superpongan; sin badge, el
+  // tiempo va centrado usando todo el alto de la celda.
   drivers.forEach((driver) => {
     const col = g.append("g");
     const cx = x(driver.driver);
@@ -277,6 +289,7 @@ function drawChart(drivers, maxLap) {
       const cy = y(lap.lap);
       const { fill, badge } = classifyLap(lap);
       const textColor = textColorFor(fill);
+      const centerX = cx + (x.bandwidth() - 1) / 2;
 
       col.append("rect")
         .attr("x", cx)
@@ -285,18 +298,20 @@ function drawChart(drivers, maxLap) {
         .attr("height", cellHeight - 1)
         .attr("fill", fill);
 
+      const timeY = badge ? cy + cellHeight - 9 : cy + (cellHeight - 1) / 2;
+
       col.append("text")
         .attr("class", "cell-time")
-        .attr("x", cx + (x.bandwidth() - 1) / 2)
-        .attr("y", cy + (cellHeight - 1) / 2)
+        .attr("x", centerX)
+        .attr("y", timeY)
         .attr("fill", textColor)
         .text(formatLapTime(lap.time));
 
       if (badge) {
         col.append("text")
           .attr("class", "cell-badge")
-          .attr("x", cx + x.bandwidth() - 8)
-          .attr("y", cy + 6)
+          .attr("x", centerX)
+          .attr("y", cy + 8)
           .attr("fill", textColor)
           .text(badge);
       }
