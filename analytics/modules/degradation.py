@@ -18,20 +18,26 @@ logger = logging.getLogger(__name__)
 
 MIN_LAPS_FOR_CURVE = 5
 
-# Máximo de vueltas más allá del final de la fase estable en las que se
-# sigue extrapolando linealmente la pendiente de degradación al corregir
-# tiempos (ver capped_extrapolation_index). Más allá de ese límite, la
-# corrección se "congela" en el valor alcanzado ahí en vez de seguir
-# creciendo sin control — la pendiente se ajustó solo con datos de la fase
-# estable, y extrapolarla indefinidamente sobre stints largos puede
-# producir correcciones de varios segundos sin respaldo real en los datos
-# (visto en pace_debug.csv: un stint sin cliff detectado donde el ritmo
-# mejoraba, no degradaba, terminó con ~4s de corrección acumulada).
+# Tope de la corrección de degradación aplicada por vuelta, expresado como
+# múltiplo de la variabilidad de la fase estable (consistency = std de esa
+# fase). La pendiente se ajusta solo con datos de la fase estable; sobre
+# stints largos, extrapolarla sin límite puede acumular correcciones de
+# varios segundos sin respaldo real en los datos (visto en pace_debug.csv:
+# un stint sin cliff detectado donde el ritmo mejoraba, no degradaba,
+# terminó con ~4-5s de corrección acumulada). Escalar el tope con la propia
+# variabilidad del stint (en vez de un número fijo de vueltas) evita que un
+# tope único resulte demasiado laxo en stints cortos y sin efecto real —
+# como pasó al probar con un tope en cantidad de vueltas.
 #
-# None desactiva el límite (vuelve al comportamiento anterior: extrapolación
-# lineal sin tope sobre todo el resto del stint) — para revertir este
-# cambio, alcanza con poner esta constante en None.
-MAX_EXTRAPOLATION_LAPS_BEYOND_STABLE = 5
+# None desactiva el límite (vuelve al comportamiento anterior: corrección
+# sin tope) — para revertir este cambio, alcanza con poner esta constante
+# en None.
+MAX_CORRECTION_STD_MULTIPLIER = 3.0
+
+# Piso absoluto (segundos) para el tope, para el caso de una fase estable
+# casi sin variabilidad (consistency ~ 0): sin este piso, el tope colapsaría
+# a ~0 y anularía toda corrección de degradación, aunque sea legítima.
+MIN_CORRECTION_CAP_SECONDS = 0.5
 
 
 def fit_degradation_curve(lap_times, lap_numbers):
@@ -88,35 +94,37 @@ def fit_degradation_curve(lap_times, lap_numbers):
                 cliff_lap = int(lap_numbers[stable_laps + i])
                 break
 
+    if MAX_CORRECTION_STD_MULTIPLIER is None:
+        max_correction = None
+    else:
+        max_correction = max(
+            MAX_CORRECTION_STD_MULTIPLIER * consistency, MIN_CORRECTION_CAP_SECONDS
+        )
+
     return {
         "baseline": float(baseline),
         "delta_times": delta_times,
         "degradation_slope": degradation_slope,
         "consistency": consistency,
         "cliff_lap": cliff_lap,
-        # Índice (0-based, dentro del grupo) donde termina la fase estable
-        # y empieza el dropoff. Se usa en capped_extrapolation_index para
-        # limitar cuánto se extrapola la pendiente más allá de donde se
-        # ajustó realmente.
-        "stable_end_idx": stable_laps,
+        # Tope (segundos) para la corrección aplicada por vuelta, ver
+        # cap_correction. None si MAX_CORRECTION_STD_MULTIPLIER está
+        # desactivado.
+        "max_correction": max_correction,
         "warmup_avg": float(np.mean(warmup)) if len(warmup) else 0.0,
         "stable_avg": float(np.mean(stable)) if len(stable) else 0.0,
         "dropoff_avg": float(np.mean(dropoff)) if len(dropoff) else 0.0,
     }
 
 
-def capped_extrapolation_index(local_idx, stable_end_idx):
+def cap_correction(raw_correction, max_correction):
     """
-    Limita el índice usado para extrapolar la pendiente de degradación al
-    corregir tiempos vuelta a vuelta: más allá de
-    stable_end_idx + MAX_EXTRAPOLATION_LAPS_BEYOND_STABLE, el índice queda
-    "congelado" en ese tope (la corrección deja de crecer, pero no
-    desaparece del todo). Si MAX_EXTRAPOLATION_LAPS_BEYOND_STABLE es None,
-    devuelve local_idx sin modificar (extrapolación lineal sin límite,
-    comportamiento anterior a este cambio).
+    Acota (en valor absoluto) la corrección de degradación calculada como
+    degradation_slope * índice de vuelta dentro del grupo, a max_correction
+    segundos. max_correction=None desactiva el tope (devuelve raw_correction
+    sin modificar).
     """
-    if MAX_EXTRAPOLATION_LAPS_BEYOND_STABLE is None:
-        return local_idx
+    if max_correction is None:
+        return raw_correction
 
-    cap = stable_end_idx + MAX_EXTRAPOLATION_LAPS_BEYOND_STABLE
-    return np.minimum(local_idx, cap)
+    return np.clip(raw_correction, -max_correction, max_correction)
