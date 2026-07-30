@@ -9,10 +9,12 @@ Servicio compartido de corrección de ritmo, usado por:
   módulo tiene su propia columna de traffic_pct).
 
 Orden de aplicación: excluir outliers (Lap.is_outlier: pits, track_status
-no verde, vuelta 1) -> corrección de combustible (aditiva, sobre lap_number
-real) -> corrección de degradación por (stint, compound) -> evolución de
-pista (ajustada sobre los residuales de todos los pilotos, ya sin
-combustible ni degradación).
+no verde, vuelta 1) -> excluir tráfico (Lap.in_traffic, opcional) ->
+corrección de combustible (aditiva, sobre lap_number real) -> corrección
+de degradación por (stint, compound), descartando además las vueltas desde
+el "cliff" de cada stint (ver fit_degradation_curve) -> evolución de pista
+(ajustada sobre los residuales de todos los pilotos, ya sin combustible ni
+degradación).
 """
 
 import logging
@@ -27,31 +29,35 @@ logger = logging.getLogger(__name__)
 MIN_LAPS_DEFAULT = 5
 
 
-def compute_pace_corrections(
-    qs,
-    fuel_coef,
-    min_laps=MIN_LAPS_DEFAULT,
-    exclude_traffic=True,
-    traffic_gap_threshold=1.5,
-):
+def compute_pace_corrections(qs, fuel_coef, min_laps=MIN_LAPS_DEFAULT, exclude_traffic=True):
     """
     Calcula, por piloto, el ritmo corregido a partir de un queryset de Lap
     ya filtrado por race_id (y opcionalmente driver/team/compound) por el
     módulo que llama.
 
-    Se excluyen SIEMPRE las vueltas outlier (Lap.is_outlier), porque el
-    ajuste de combustible/degradación/pista no es válido sobre ellas
-    (pits, SC/VSC/bandera, vuelta 1). La exclusión de vueltas "en tráfico"
-    (gap_to_front < traffic_gap_threshold) es opcional vía exclude_traffic,
-    para que cada módulo consumidor decida según su propósito.
+    Se excluyen SIEMPRE las vueltas outlier (Lap.is_outlier: pits,
+    SC/VSC/bandera, vuelta 1). La exclusión de vueltas "en tráfico" es
+    opcional vía exclude_traffic, y usa Lap.in_traffic (traffic_pct por
+    encima de Lap.IN_TRAFFIC_THRESHOLD_PCT) — el mismo criterio que ya usan
+    laps_in_traffic y lap_times_traffic, en vez de un umbral propio sobre
+    gap_to_front promedio (que podía dejar pasar vueltas "medio sucias").
+
+    Dentro de cada grupo (stint, compound), además se descartan las
+    vueltas desde el "cliff" detectado por fit_degradation_curve en
+    adelante: la pendiente de degradación se estima solo sobre la fase
+    estable del stint y no es válida para extrapolar sobre el dropoff
+    (donde la degradación se acelera, no es lineal); dejarlas adentro
+    corregidas con esa pendiente las subcorrige y sesga el promedio hacia
+    arriba.
 
     Devuelve un dict {driver_code: {...}} con arrays numpy paralelos
-    (mismo orden, por lap_number ascendente):
+    (mismo orden, por lap_number ascendente, ya sin las vueltas excluidas):
     - laps: objetos Lap originales
     - lap_numbers, raw, fuel_corrected, tyre_corrected, track_corrected
 
-    Pilotos con menos de min_laps vueltas válidas tras los filtros no
-    aparecen en el resultado. Devuelve {} si ningún piloto llega al mínimo.
+    Pilotos con menos de min_laps vueltas válidas tras TODOS los filtros
+    (outliers, tráfico, y cliff) no aparecen en el resultado. Devuelve {}
+    si ningún piloto llega al mínimo.
     """
     grouped = defaultdict(list)
     total_laps = 0
@@ -65,39 +71,35 @@ def compute_pace_corrections(
             excluded_outliers += 1
             continue
 
-        if exclude_traffic and lap.gap_to_front is not None and lap.gap_to_front < traffic_gap_threshold:
+        if exclude_traffic and lap.in_traffic:
             excluded_traffic += 1
             continue
 
         grouped[lap.driver.code].append(lap)
 
     # -----------------------------
-    # 1. Combustible + degradación por piloto
+    # 1. Combustible + degradación (con exclusión de cliff) por piloto
     # -----------------------------
 
     per_driver_data = {}
     residual_lap_numbers = []
     residual_values = []
+    excluded_cliff_total = 0
 
-    for driver_code, laps in grouped.items():
-        if len(laps) < min_laps:
-            continue
-
-        laps = sorted(laps, key=lambda lap: lap.lap_number)
-        lap_numbers = np.array([lap.lap_number for lap in laps])
-        lap_times = np.array([lap.lap_time for lap in laps])
+    for driver_code, driver_laps in grouped.items():
+        driver_laps = sorted(driver_laps, key=lambda lap: lap.lap_number)
+        lap_numbers = np.array([lap.lap_number for lap in driver_laps])
+        lap_times = np.array([lap.lap_time for lap in driver_laps])
 
         # Combustible: se SUMA el tiempo "ganado" por menor carga, para
         # neutralizarlo (restar exagera el efecto en vez de corregirlo).
         fuel_corrected = lap_times + lap_numbers * fuel_coef
 
-        # Degradación: por (stint, compound), usando la pendiente de la
-        # fase estable de cada grupo (ver fit_degradation_curve). Si un
-        # grupo no tiene vueltas suficientes para un ajuste confiable, se
-        # deja sin corregir.
         tyre_corrected = np.array(fuel_corrected, copy=True)
+        keep_mask = np.ones(len(driver_laps), dtype=bool)
+
         stint_groups = defaultdict(list)
-        for idx, lap in enumerate(laps):
+        for idx, lap in enumerate(driver_laps):
             stint_groups[(lap.stint_id, lap.compound)].append(idx)
 
         for (stint_id, compound), idxs in stint_groups.items():
@@ -115,10 +117,30 @@ def compute_pace_corrections(
                 continue
 
             local_idx = np.arange(len(idxs))
-            tyre_corrected[idxs] = group_times - curve["degradation_slope"] * local_idx
+            corrected = group_times - curve["degradation_slope"] * local_idx
+            cliff_lap = curve["cliff_lap"]
+
+            for pos, idx in enumerate(idxs):
+                if cliff_lap is not None and group_numbers[pos] >= cliff_lap:
+                    keep_mask[idx] = False
+                    continue
+                tyre_corrected[idx] = corrected[pos]
+
+        n_excluded_cliff = int((~keep_mask).sum())
+        excluded_cliff_total += n_excluded_cliff
+
+        if n_excluded_cliff:
+            driver_laps = [lap for lap, keep in zip(driver_laps, keep_mask) if keep]
+            lap_numbers = lap_numbers[keep_mask]
+            lap_times = lap_times[keep_mask]
+            fuel_corrected = fuel_corrected[keep_mask]
+            tyre_corrected = tyre_corrected[keep_mask]
+
+        if len(driver_laps) < min_laps:
+            continue
 
         per_driver_data[driver_code] = {
-            "laps": laps,
+            "laps": driver_laps,
             "lap_numbers": lap_numbers,
             "raw": lap_times,
             "fuel_corrected": fuel_corrected,
@@ -130,8 +152,8 @@ def compute_pace_corrections(
     if not per_driver_data:
         logger.warning(
             "compute_pace_corrections: sin pilotos con vueltas suficientes tras filtros "
-            "(%s vuelta(s) evaluadas, %s por outlier, %s por tráfico)",
-            total_laps, excluded_outliers, excluded_traffic
+            "(%s vuelta(s) evaluadas, %s por outlier, %s por tráfico, %s por cliff)",
+            total_laps, excluded_outliers, excluded_traffic, excluded_cliff_total
         )
         return {}
 
@@ -166,8 +188,8 @@ def compute_pace_corrections(
 
     logger.info(
         "compute_pace_corrections: %s vuelta(s) evaluadas -> %s piloto(s) con datos, "
-        "%s vuelta(s) descartadas por outlier, %s por tráfico",
-        total_laps, len(per_driver_data), excluded_outliers, excluded_traffic
+        "%s vuelta(s) descartadas por outlier, %s por tráfico, %s por cliff",
+        total_laps, len(per_driver_data), excluded_outliers, excluded_traffic, excluded_cliff_total
     )
 
     return per_driver_data

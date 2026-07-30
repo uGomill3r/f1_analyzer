@@ -21,15 +21,13 @@ class PaceAdjusted(BaseAnalysisModule):
     lap_times_traffic.py); acá solo se arma la respuesta por piloto.
 
     A diferencia de lap_times_traffic, este módulo SÍ excluye del ajuste
-    las vueltas "en tráfico" (gap_to_front < TRAFFIC_GAP_THRESHOLD): al ser
-    un módulo de ritmo puro por piloto (no un heatmap con su propia columna
-    de tráfico), esas vueltas distorsionarían el ajuste de degradación y
-    evolución de pista.
+    las vueltas "en tráfico" (Lap.in_traffic): al ser un módulo de ritmo
+    puro por piloto (no un heatmap con su propia columna de tráfico), esas
+    vueltas distorsionarían el ajuste de degradación y evolución de pista.
     """
 
     name = "pace_adjusted"
 
-    TRAFFIC_GAP_THRESHOLD = 1.5  # segundos
     MIN_LAPS = 5
 
     # -----------------------------
@@ -65,7 +63,6 @@ class PaceAdjusted(BaseAnalysisModule):
             fuel_coef=settings.FUEL_CORRECTION_PER_LAP,
             min_laps=self.MIN_LAPS,
             exclude_traffic=True,
-            traffic_gap_threshold=self.TRAFFIC_GAP_THRESHOLD,
         )
 
         if not per_driver_data:
