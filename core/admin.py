@@ -37,6 +37,10 @@ class StintAdmin(admin.ModelAdmin):
 
 @admin.register(Lap)
 class LapAdmin(admin.ModelAdmin):
+    # is_pit sigue siendo válido acá: list_display admite properties/atributos
+    # calculados del modelo, no solo campos de DB.
     list_display = ("race", "driver", "lap_number", "lap_time", "compound", "is_pit", "track_status", "is_outlier")
-    list_filter = ("race", "compound", "is_pit")
+    # list_filter, en cambio, exige campos reales (o un SimpleListFilter):
+    # is_pit ya no es un campo desde que se separó en is_pit_in/is_pit_out.
+    list_filter = ("race", "compound", "is_pit_in", "is_pit_out")
     search_fields = ("driver__code",)
