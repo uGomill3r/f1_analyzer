@@ -155,9 +155,15 @@ class Lap(models.Model):
     lap_time = models.FloatField(null=True, blank=True)
     compound = models.CharField(max_length=20, blank=True)
 
-    # True si la vuelta es de entrada o salida de pits (PitInTime o PitOutTime
-    # presentes en FastF1). No es una "vuelta completa" representativa del ritmo.
-    is_pit = models.BooleanField(default=False)
+    # True si la vuelta tiene PitInTime (el piloto entró a boxes en esta
+    # vuelta). Separado de is_pit_out para poder distinguir "IN" de "OUT"
+    # en charts (ej: lap_times_traffic); antes era un solo campo is_pit.
+    is_pit_in = models.BooleanField(default=False)
+
+    # True si la vuelta tiene PitOutTime (el piloto salió de boxes en esta
+    # vuelta). Puede coincidir con is_pit_in en la misma vuelta en casos
+    # excepcionales (double-stack / pit muy corto).
+    is_pit_out = models.BooleanField(default=False)
 
     # Códigos de estado de pista de FastF1 concatenados tal cual vienen
     # (ej: "1", "24", "6"). Vacío si no se pudo determinar.
@@ -209,6 +215,11 @@ class Lap(models.Model):
 
     def __str__(self):
         return f"{self.driver.code} - {self.race} - vuelta {self.lap_number}"
+
+    @property
+    def is_pit(self):
+        """True si la vuelta es de entrada O salida de pits (cualquiera de las dos)."""
+        return self.is_pit_in or self.is_pit_out
 
     @property
     def outlier_reasons(self):

@@ -175,8 +175,11 @@ class Command(BaseCommand):
                         else None
                     )
 
-                    # una vuelta es "de pits" si entra o sale del pit lane en ella
-                    is_pit = pd.notna(lap.get("PitInTime")) or pd.notna(lap.get("PitOutTime"))
+                    # Entrada y salida de pits se guardan por separado (antes
+                    # era un solo campo is_pit): permite distinguir "IN" de
+                    # "OUT" en charts como lap_times_traffic.
+                    is_pit_in = pd.notna(lap.get("PitInTime"))
+                    is_pit_out = pd.notna(lap.get("PitOutTime"))
 
                     # TrackStatus puede venir como NaN o como string de códigos (ej: "1", "24")
                     track_status_raw = lap.get("TrackStatus")
@@ -229,7 +232,8 @@ class Command(BaseCommand):
                             "stint": stint,
                             "lap_time": lap_time,
                             "compound": lap["Compound"] or "",
-                            "is_pit": is_pit,
+                            "is_pit_in": is_pit_in,
+                            "is_pit_out": is_pit_out,
                             "track_status": track_status,
                             "traffic_pct": traffic_pct,
                             "gap_to_front": gap_to_front,

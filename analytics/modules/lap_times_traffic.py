@@ -18,17 +18,17 @@ class LapTimesTraffic(LapsInTraffic):
     lap_time (no se descartan las que no tienen traffic_pct ni track_status),
     porque el objetivo es mostrar el tiempo de cada vuelta siempre; el color
     de fondo es solo una señal adicional:
-    - is_pit=True                       -> fondo celeste (entrada/salida de pits)
-    - track_status_label presente       -> fondo amarillo (SC/VSC/bandera)
-    - traffic_pct disponible            -> degradado verde (aire limpio) a
-                                           rojo (tráfico), quiebre en el umbral
-                                           Lap.IN_TRAFFIC_THRESHOLD_PCT (33%)
-    - ninguno de los anteriores         -> sin dato de tráfico (fondo neutro)
+    - is_pit_in / is_pit_out       -> fondo celeste (entrada/salida de pits),
+                                       distinguidas en el frontend con badge
+                                       "IN" / "OUT"
+    - track_status_label presente  -> fondo amarillo (SC/VSC/bandera)
+    - traffic_pct disponible       -> degradado verde (aire limpio) a rojo
+                                       (tráfico), quiebre en el umbral
+                                       Lap.IN_TRAFFIC_THRESHOLD_PCT (33%)
+    - ninguno de los anteriores    -> sin dato de tráfico (fondo neutro)
 
     Reutiliza get_queryset de LapsInTraffic (mismo filtro: lap_time no nulo,
     driver/team opcionales) y serialize (genérico sobre "data"/"laps").
-    Nota: is_pit no distingue pit-in de pit-out a nivel de modelo (Lap.is_pit
-    es un solo booleano), así que la señalización de pit es genérica ("P").
     """
 
     name = "lap_times_traffic"
@@ -40,7 +40,8 @@ class LapTimesTraffic(LapsInTraffic):
         )
 
         by_driver = {}
-        pit_laps = 0
+        pit_in_laps = 0
+        pit_out_laps = 0
         track_status_laps = 0
         laps_without_traffic_data = 0
 
@@ -57,13 +58,16 @@ class LapTimesTraffic(LapsInTraffic):
                 "lap": lap.lap_number,
                 "time": round(lap.lap_time, 3),
                 "traffic_pct": round(lap.traffic_pct, 1) if lap.traffic_pct is not None else None,
-                "is_pit": lap.is_pit,
+                "is_pit_in": lap.is_pit_in,
+                "is_pit_out": lap.is_pit_out,
                 "track_status_label": track_status_label,
             }
             entry["laps"].append(lap_entry)
 
-            if lap.is_pit:
-                pit_laps += 1
+            if lap.is_pit_in:
+                pit_in_laps += 1
+            if lap.is_pit_out:
+                pit_out_laps += 1
             if track_status_label is not None:
                 track_status_laps += 1
             if lap.traffic_pct is None and not lap.is_pit and track_status_label is None:
@@ -79,9 +83,11 @@ class LapTimesTraffic(LapsInTraffic):
         result.sort(key=lambda d: (d["final_position"] is None, d["final_position"] or 0))
 
         logger.info(
-            "lap_times_traffic: race_id=%s -> %s piloto(s), %s vuelta(s) de pit, "
-            "%s vuelta(s) con track_status, %s vuelta(s) sin dato de tráfico",
-            race_id, len(result), pit_laps, track_status_laps, laps_without_traffic_data,
+            "lap_times_traffic: race_id=%s -> %s piloto(s), %s vuelta(s) de pit-in, "
+            "%s vuelta(s) de pit-out, %s vuelta(s) con track_status, "
+            "%s vuelta(s) sin dato de tráfico",
+            race_id, len(result), pit_in_laps, pit_out_laps,
+            track_status_laps, laps_without_traffic_data,
         )
 
         return result

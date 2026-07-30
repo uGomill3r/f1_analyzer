@@ -110,7 +110,8 @@
     <span class="item">Aire limpio (0%) → tráfico (100%), quiebre en 33%:</span>
     <svg id="legend-gradient" width="220" height="34"></svg>
     <span class="item"><span class="swatch" style="background:var(--track-status)"></span>SC / VSC / bandera (Y, SC, VSC, R)</span>
-    <span class="item"><span class="swatch" style="background:var(--pit)"></span>Entrada/salida de pits (P)</span>
+    <span class="item"><span class="swatch" style="background:var(--pit)"></span>Entrada a pits (IN)</span>
+    <span class="item"><span class="swatch" style="background:var(--pit)"></span>Salida de pits (OUT)</span>
     <span class="item"><span class="swatch" style="background:var(--no-data)"></span>Sin dato de tráfico</span>
   </div>
 
@@ -196,13 +197,19 @@ function formatLapTime(totalSeconds) {
 
 // ---------------------------------------------------------------
 // Clasificación de una vuelta: decide color de fondo + badge chiquito.
-// Prioridad: pit > track_status > degradado de tráfico > sin dato.
+// Prioridad: pit (IN/OUT) > track_status > degradado de tráfico > sin dato.
 // (asunción: si una vuelta es de pit Y bajo SC/VSC, se prioriza pit porque
 // suele ser el dato más relevante para leerla; se puede invertir fácil).
 // ---------------------------------------------------------------
 function classifyLap(lap) {
-  if (lap.is_pit) {
-    return { fill: PIT_COLOR, badge: "P" };
+  if (lap.is_pit_in && lap.is_pit_out) {
+    return { fill: PIT_COLOR, badge: "IN/OUT" };
+  }
+  if (lap.is_pit_in) {
+    return { fill: PIT_COLOR, badge: "IN" };
+  }
+  if (lap.is_pit_out) {
+    return { fill: PIT_COLOR, badge: "OUT" };
   }
   if (lap.track_status_label) {
     return { fill: TRACK_STATUS_COLOR, badge: lap.track_status_label };
@@ -298,7 +305,9 @@ function drawChart(drivers, maxLap) {
     .call(d3.axisLeft(y).tickValues(allLapTicks).tickFormat(d3.format("d")).tickSize(0));
 
   lapAxis.select(".domain").remove();
-
+  // axisLeft posiciona cada tick en y(lap) (borde superior de esa fila);
+  // se corrige acá sumando medio cellHeight para centrarlo verticalmente
+  // con la fila que representa.
   lapAxis.selectAll(".tick")
     .attr("transform", (d) => `translate(0, ${y(d) + cellHeight / 2})`);
   lapAxis.selectAll(".tick text")
