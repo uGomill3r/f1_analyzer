@@ -11,10 +11,11 @@ Servicio compartido de corrección de ritmo, usado por:
 Orden de aplicación: excluir outliers (Lap.is_outlier: pits, track_status
 no verde, vuelta 1) -> excluir tráfico (Lap.in_traffic, opcional) ->
 corrección de combustible (aditiva, sobre lap_number real) -> corrección
-de degradación por (stint, compound), descartando además las vueltas desde
-el "cliff" de cada stint (ver fit_degradation_curve) -> evolución de pista
-(ajustada sobre los residuales de todos los pilotos, ya sin combustible ni
-degradación).
+de degradación por (stint, compound), descartando las vueltas desde el
+"cliff" de cada stint y limitando cuánto se extrapola la pendiente más
+allá de la fase estable (ver analytics/modules/degradation.py) ->
+evolución de pista (ajustada sobre los residuales de todos los pilotos,
+ya sin combustible ni degradación).
 """
 
 import logging
@@ -22,7 +23,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from analytics.modules.degradation import fit_degradation_curve
+from analytics.modules.degradation import capped_extrapolation_index, fit_degradation_curve
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +45,11 @@ def compute_pace_corrections(qs, fuel_coef, min_laps=MIN_LAPS_DEFAULT, exclude_t
 
     Dentro de cada grupo (stint, compound), además se descartan las
     vueltas desde el "cliff" detectado por fit_degradation_curve en
-    adelante: la pendiente de degradación se estima solo sobre la fase
-    estable del stint y no es válida para extrapolar sobre el dropoff
-    (donde la degradación se acelera, no es lineal); dejarlas adentro
-    corregidas con esa pendiente las subcorrige y sesga el promedio hacia
-    arriba.
+    adelante (la pendiente no es válida para extrapolar sobre el dropoff),
+    y la extrapolación de la pendiente sobre el resto del stint se limita
+    vía capped_extrapolation_index, para no acumular correcciones de varios
+    segundos sin respaldo real cuando un stint largo no dispara ningún
+    cliff pero tampoco sostiene la tendencia de la fase estable.
 
     Devuelve un dict {driver_code: {...}} con arrays numpy paralelos
     (mismo orden, por lap_number ascendente, ya sin las vueltas excluidas):
@@ -78,7 +79,8 @@ def compute_pace_corrections(qs, fuel_coef, min_laps=MIN_LAPS_DEFAULT, exclude_t
         grouped[lap.driver.code].append(lap)
 
     # -----------------------------
-    # 1. Combustible + degradación (con exclusión de cliff) por piloto
+    # 1. Combustible + degradación (con exclusión de cliff, extrapolación
+    #    acotada) por piloto
     # -----------------------------
 
     per_driver_data = {}
@@ -117,7 +119,8 @@ def compute_pace_corrections(qs, fuel_coef, min_laps=MIN_LAPS_DEFAULT, exclude_t
                 continue
 
             local_idx = np.arange(len(idxs))
-            corrected = group_times - curve["degradation_slope"] * local_idx
+            applied_idx = capped_extrapolation_index(local_idx, curve["stable_end_idx"])
+            corrected = group_times - curve["degradation_slope"] * applied_idx
             cliff_lap = curve["cliff_lap"]
 
             for pos, idx in enumerate(idxs):
