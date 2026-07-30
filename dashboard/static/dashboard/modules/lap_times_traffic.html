@@ -12,6 +12,7 @@
     --track-status: #f2c744;
     --pit: #8ecae6;
     --no-data: #e3e1d6;
+    --no-correction: #cfcabc;
   }
   body {
     background: var(--bg);
@@ -67,6 +68,17 @@
   #time-format-toggle input {
     cursor: pointer;
   }
+  #corrected-toggle-label {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #corrected-toggle-label input {
+    cursor: pointer;
+  }
   #legend {
     font-size: 13px;
     color: var(--muted);
@@ -104,6 +116,11 @@
     Mostrar tiempos en segundos (ej: 97.123 en vez de 1:37.123)
   </label>
 
+  <label id="corrected-toggle-label">
+    <input type="checkbox" id="corrected-toggle">
+    Mostrar ritmo corregido (combustible + degradación + evolución de pista)
+  </label>
+
   <svg id="chart"></svg>
 
   <div id="legend">
@@ -113,6 +130,7 @@
     <span class="item"><span class="swatch" style="background:var(--pit)"></span>Entrada a pits (IN)</span>
     <span class="item"><span class="swatch" style="background:var(--pit)"></span>Salida de pits (OUT)</span>
     <span class="item"><span class="swatch" style="background:var(--no-data)"></span>Sin dato de tráfico</span>
+    <span class="item" id="legend-no-correction" style="display:none"><span class="swatch" style="background:var(--no-correction)"></span>Sin ritmo corregido disponible (pit/SC/VSC/vuelta 1)</span>
   </div>
 
 <script>
@@ -153,6 +171,7 @@ function teamColor(teamName) {
 const TRACK_STATUS_COLOR = "#f2c744";
 const PIT_COLOR = "#8ecae6";
 const NO_DATA_COLOR = "#e3e1d6";
+const NO_CORRECTION_COLOR = "#cfcabc";
 
 // Umbral "en tráfico" (Lap.IN_TRAFFIC_THRESHOLD_PCT en core/models.py): a
 // partir de acá el degradado pasa de verde a rojo.
@@ -186,9 +205,11 @@ function formatLapTimeSeconds(totalSeconds) {
   return totalSeconds.toFixed(3);
 }
 
-// Estado del toggle de formato: se lee al dibujar cada celda, así que un
-// solo re-render (sin refetch) alcanza para aplicar el cambio.
+// Estado de los toggles: se leen al dibujar cada celda, así que un solo
+// re-render (sin refetch, corrected_time ya viene en la respuesta del
+// módulo) alcanza para aplicar cualquiera de los dos cambios.
 let showSeconds = false;
+let showCorrected = false;
 
 function formatLapTime(totalSeconds) {
   if (totalSeconds == null) return "";
@@ -336,9 +357,18 @@ function drawChart(drivers, maxLap) {
 
     driver.laps.forEach((lap) => {
       const cy = y(lap.lap);
-      const { fill, badge } = classifyLap(lap);
-      const textColor = textColorFor(fill);
       const centerX = cx + (x.bandwidth() - 1) / 2;
+
+      // Con el toggle de ritmo corregido activo, una vuelta sin
+      // corrected_time (pit/SC/VSC/vuelta 1, o stint sin datos suficientes)
+      // no es comparable: se pinta gris y vacía en vez de caer al tiempo
+      // crudo, para no mezclar métricas distintas en el mismo heatmap.
+      const noCorrectionAvailable = showCorrected && lap.corrected_time == null;
+
+      const { fill, badge } = noCorrectionAvailable
+        ? { fill: NO_CORRECTION_COLOR, badge: null }
+        : classifyLap(lap);
+      const textColor = textColorFor(fill);
 
       col.append("rect")
         .attr("x", cx)
@@ -347,22 +377,25 @@ function drawChart(drivers, maxLap) {
         .attr("height", cellHeight - 1)
         .attr("fill", fill);
 
-      const timeY = badge ? cy + cellHeight - 9 : cy + (cellHeight - 1) / 2;
+      if (!noCorrectionAvailable) {
+        const displayTime = showCorrected ? lap.corrected_time : lap.time;
+        const timeY = badge ? cy + cellHeight - 9 : cy + (cellHeight - 1) / 2;
 
-      col.append("text")
-        .attr("class", "cell-time")
-        .attr("x", centerX)
-        .attr("y", timeY)
-        .attr("fill", textColor)
-        .text(formatLapTime(lap.time));
-
-      if (badge) {
         col.append("text")
-          .attr("class", "cell-badge")
+          .attr("class", "cell-time")
           .attr("x", centerX)
-          .attr("y", cy + 8)
+          .attr("y", timeY)
           .attr("fill", textColor)
-          .text(badge);
+          .text(formatLapTime(displayTime));
+
+        if (badge) {
+          col.append("text")
+            .attr("class", "cell-badge")
+            .attr("x", centerX)
+            .attr("y", cy + 8)
+            .attr("fill", textColor)
+            .text(badge);
+        }
       }
     });
   });
@@ -398,6 +431,16 @@ async function loadAndRender() {
 // Cambiar el formato de tiempo solo redibuja con los datos ya cargados.
 document.getElementById("seconds-toggle").addEventListener("change", (event) => {
   showSeconds = event.target.checked;
+  if (lastDrivers) {
+    drawChart(lastDrivers, lastMaxLap);
+  }
+});
+
+// Igual que el toggle de formato: corrected_time ya viene en la respuesta
+// del módulo, así que alcanza con redibujar sin volver a pegarle a la API.
+document.getElementById("corrected-toggle").addEventListener("change", (event) => {
+  showCorrected = event.target.checked;
+  document.getElementById("legend-no-correction").style.display = showCorrected ? "" : "none";
   if (lastDrivers) {
     drawChart(lastDrivers, lastMaxLap);
   }

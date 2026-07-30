@@ -2,7 +2,10 @@
 
 import logging
 
+from django.conf import settings
+
 from analytics.modules.laps_in_traffic import LapsInTraffic
+from analytics.services.pace_correction import compute_pace_corrections
 from core.models import RaceResult
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,18 @@ class LapTimesTraffic(LapsInTraffic):
                                        Lap.IN_TRAFFIC_THRESHOLD_PCT (33%)
     - ninguno de los anteriores    -> sin dato de tráfico (fondo neutro)
 
+    Cada vuelta también trae corrected_time: el ritmo corregido por
+    combustible + degradación de neumáticos + evolución de pista (ver
+    analytics/services/pace_correction.py), pensado para el checkbox
+    "mostrar ritmo corregido" del frontend. A diferencia de pace_adjusted,
+    acá SÍ se corrigen las vueltas en tráfico (este heatmap ya tiene su
+    propia columna de traffic_pct para señalizarlas, no hace falta
+    excluirlas del ajuste). corrected_time queda en None para vueltas
+    outlier (pit, SC/VSC/bandera, vuelta 1) o para pilotos/stints sin datos
+    suficientes para un ajuste confiable; el frontend debe mostrar esas
+    celdas vacías/grises cuando el modo corregido está activo, en vez de
+    caer al tiempo crudo (no son comparables).
+
     Reutiliza get_queryset de LapsInTraffic (mismo filtro: lap_time no nulo,
     driver/team opcionales) y serialize (genérico sobre "data"/"laps").
     """
@@ -39,11 +54,27 @@ class LapTimesTraffic(LapsInTraffic):
             RaceResult.objects.filter(race_id=race_id).values_list("driver__code", "position")
         )
 
+        # Ritmo corregido, siempre calculado (una sola carrera, costo bajo).
+        # exclude_traffic=False: a diferencia de pace_adjusted, acá interesa
+        # corregir también las vueltas en tráfico, ya que el propio heatmap
+        # tiene su columna de traffic_pct para señalizarlas por separado.
+        per_driver_corrections = compute_pace_corrections(
+            qs,
+            fuel_coef=settings.FUEL_CORRECTION_PER_LAP,
+            exclude_traffic=False,
+        )
+        corrected_lookup = {
+            (driver_code, int(lap_number)): round(float(corrected), 3)
+            for driver_code, data in per_driver_corrections.items()
+            for lap_number, corrected in zip(data["lap_numbers"], data["track_corrected"])
+        }
+
         by_driver = {}
         pit_in_laps = 0
         pit_out_laps = 0
         track_status_laps = 0
         laps_without_traffic_data = 0
+        laps_without_correction = 0
 
         for lap in qs:
             entry = by_driver.setdefault(lap.driver.code, {
@@ -53,10 +84,12 @@ class LapTimesTraffic(LapsInTraffic):
             })
 
             track_status_label = lap.track_status_label
+            corrected_time = corrected_lookup.get((lap.driver.code, lap.lap_number))
 
             lap_entry = {
                 "lap": lap.lap_number,
                 "time": round(lap.lap_time, 3),
+                "corrected_time": corrected_time,
                 "traffic_pct": round(lap.traffic_pct, 1) if lap.traffic_pct is not None else None,
                 "is_pit_in": lap.is_pit_in,
                 "is_pit_out": lap.is_pit_out,
@@ -72,6 +105,8 @@ class LapTimesTraffic(LapsInTraffic):
                 track_status_laps += 1
             if lap.traffic_pct is None and not lap.is_pit and track_status_label is None:
                 laps_without_traffic_data += 1
+            if corrected_time is None:
+                laps_without_correction += 1
 
         for driver_code, entry in by_driver.items():
             entry["final_position"] = positions_by_driver.get(driver_code)
@@ -85,9 +120,9 @@ class LapTimesTraffic(LapsInTraffic):
         logger.info(
             "lap_times_traffic: race_id=%s -> %s piloto(s), %s vuelta(s) de pit-in, "
             "%s vuelta(s) de pit-out, %s vuelta(s) con track_status, "
-            "%s vuelta(s) sin dato de tráfico",
+            "%s vuelta(s) sin dato de tráfico, %s vuelta(s) sin ritmo corregido",
             race_id, len(result), pit_in_laps, pit_out_laps,
-            track_status_laps, laps_without_traffic_data,
+            track_status_laps, laps_without_traffic_data, laps_without_correction,
         )
 
         return result
