@@ -36,9 +36,12 @@ class LapTimesTraffic(LapsInTraffic):
     "mostrar ritmo corregido" del frontend. A diferencia de pace_adjusted,
     acá SÍ se corrigen las vueltas en tráfico (este heatmap ya tiene su
     propia columna de traffic_pct para señalizarlas, no hace falta
-    excluirlas del ajuste). corrected_time queda en None para vueltas
-    outlier (pit, SC/VSC/bandera, vuelta 1) o para pilotos/stints sin datos
-    suficientes para un ajuste confiable; el frontend debe mostrar esas
+    excluirlas del ajuste). corrected_time queda en None para: vueltas
+    outlier (pit, SC/VSC/bandera, vuelta 1), vueltas descartadas por estar
+    en el tramo posterior al "cliff" de degradación de su stint (la
+    pendiente de degradación no es válida para extrapolar ahí, ver
+    analytics/modules/degradation.py), o pilotos/stints sin datos
+    suficientes para un ajuste confiable. El frontend debe mostrar esas
     celdas vacías/grises cuando el modo corregido está activo, en vez de
     caer al tiempo crudo (no son comparables).
 
