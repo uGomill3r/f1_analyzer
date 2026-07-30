@@ -150,8 +150,18 @@ def compute_pace_corrections(
         )
         track_model = [0, 0]
 
+    # Se resta SOLO la pendiente (evolución de pista: la tendencia de que la
+    # pista se pone más rápida con las vueltas), NO el intercept completo.
+    # El intercept del ajuste captura el nivel de ritmo absoluto de la
+    # grilla (ej: ~87s), no un efecto a corregir; restarlo entero dejaba
+    # track_corrected como un residual cercano a 0 (o negativo), sin
+    # significado físico como tiempo de vuelta. Restando solo la pendiente,
+    # track_corrected queda en la misma escala de segundos que
+    # tyre_corrected, y el nivel de ritmo propio de cada piloto no se ve
+    # alterado por el ajuste de pista.
+    track_slope = track_model[0]
     for driver_code, data in per_driver_data.items():
-        track_delta = np.polyval(track_model, data["lap_numbers"])
+        track_delta = track_slope * data["lap_numbers"]
         data["track_corrected"] = data["tyre_corrected"] - track_delta
 
     logger.info(
