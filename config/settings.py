@@ -128,6 +128,12 @@ CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localho
 # FastF1 cache local (ignorado en git, ver .gitignore)
 FASTF1_CACHE_DIR = env("FASTF1_CACHE_DIR", default=str(BASE_DIR / "cache"))
 
+# Corrección de combustible usada por analytics/modules/pace_adjusted.py:
+# segundos por vuelta que el auto "gana" por menor carga de combustible
+# (se suma al lap_time real para neutralizar ese efecto). Configurable sin
+# tocar código.
+FUEL_CORRECTION_PER_LAP = env.float("FUEL_CORRECTION_PER_LAP", default=0.035)
+
 
 # Logging
 # Sin esta config, cualquier logging.getLogger(__name__) de nuestro código
