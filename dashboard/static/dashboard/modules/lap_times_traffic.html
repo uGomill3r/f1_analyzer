@@ -56,6 +56,17 @@
     font-size: 13px;
     margin-bottom: 8px;
   }
+  #time-format-toggle {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #time-format-toggle input {
+    cursor: pointer;
+  }
   #legend {
     font-size: 13px;
     color: var(--muted);
@@ -87,6 +98,12 @@
   <div class="subtitle">Tiempo de cada vuelta por piloto; color = condición de la vuelta</div>
 
   <div id="status"></div>
+
+  <label id="time-format-toggle">
+    <input type="checkbox" id="seconds-toggle">
+    Mostrar tiempos en segundos (ej: 97.123 en vez de 1:37.123)
+  </label>
+
   <svg id="chart"></svg>
 
   <div id="legend">
@@ -103,8 +120,9 @@
 // telemetría, ver core/services/traffic.py) pero con foco en el TIEMPO de
 // cada vuelta en vez del % de tráfico, y ejes invertidos: pilotos en X,
 // número de vuelta en Y. Igual que laps_in_traffic, se embebe en un
-// <iframe> del frontend base sin controles propios (solo race_id/api_base
-// por query param).
+// <iframe> del frontend base sin controles propios del padre (solo
+// race_id/api_base por query param); el toggle de formato de tiempo es
+// interno a esta página, no requiere postMessage con base.html.
 // ---------------------------------------------------------------
 
 const TEAM_COLORS = {
@@ -155,11 +173,25 @@ function textColorFor(bgColor) {
   return luminance < 140 ? "#f5f1e8" : "#1c1c1c";
 }
 
-function formatLapTime(totalSeconds) {
-  if (totalSeconds == null) return "";
+// Formato mm:ss.mmm (ej: 97.123 -> "1:37.123").
+function formatLapTimeClock(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = (totalSeconds - minutes * 60).toFixed(3);
   return `${minutes}:${seconds.padStart(6, "0")}`;
+}
+
+// Formato segundos.milésimas plano (ej: 97.123 -> "97.123").
+function formatLapTimeSeconds(totalSeconds) {
+  return totalSeconds.toFixed(3);
+}
+
+// Estado del toggle de formato: se lee al dibujar cada celda, así que un
+// solo re-render (sin refetch) alcanza para aplicar el cambio.
+let showSeconds = false;
+
+function formatLapTime(totalSeconds) {
+  if (totalSeconds == null) return "";
+  return showSeconds ? formatLapTimeSeconds(totalSeconds) : formatLapTimeClock(totalSeconds);
 }
 
 // ---------------------------------------------------------------
@@ -183,6 +215,11 @@ function classifyLap(lap) {
 
 let apiBase = "http://127.0.0.1:8000";
 let raceId = null;
+
+// Último dataset cargado, para poder re-renderizar el chart al cambiar el
+// formato de tiempo sin volver a pegarle a la API.
+let lastDrivers = null;
+let lastMaxLap = null;
 
 // Mismo criterio de orden que laps_in_traffic.html (posición final real).
 function sortDrivers(drivers) {
@@ -340,10 +377,19 @@ async function loadAndRender() {
 
   statusEl.textContent = "";
 
-  const drivers = sortDrivers(payload.data);
+  lastDrivers = sortDrivers(payload.data);
+  lastMaxLap = payload.max_lap;
   drawLegend();
-  drawChart(drivers, payload.max_lap);
+  drawChart(lastDrivers, lastMaxLap);
 }
+
+// Cambiar el formato de tiempo solo redibuja con los datos ya cargados.
+document.getElementById("seconds-toggle").addEventListener("change", (event) => {
+  showSeconds = event.target.checked;
+  if (lastDrivers) {
+    drawChart(lastDrivers, lastMaxLap);
+  }
+});
 
 (function initFromQueryParams() {
   const params = new URLSearchParams(window.location.search);
