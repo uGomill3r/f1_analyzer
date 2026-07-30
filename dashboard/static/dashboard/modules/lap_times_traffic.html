@@ -298,6 +298,9 @@ function drawChart(drivers, maxLap) {
     .call(d3.axisLeft(y).tickValues(allLapTicks).tickFormat(d3.format("d")).tickSize(0));
 
   lapAxis.select(".domain").remove();
+
+  lapAxis.selectAll(".tick")
+    .attr("transform", (d) => `translate(0, ${y(d) + cellHeight / 2})`);
   lapAxis.selectAll(".tick text")
     .style("font-size", (d) => (isMajorLapTick(d) ? "12px" : "8px"))
     .style("font-weight", (d) => (isMajorLapTick(d) ? "700" : "400"))
